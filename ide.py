@@ -1,9 +1,10 @@
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
+
+from setuptools import Command
+from sintactico import ASTNode, parse_code
 from lexico import test_lexer
-from sintactico import test_parser
-from semantico import test_semantics
-from codigo_intermedio import test_intermediate_code
+from sintactico import parse_code
 from tkinter import PhotoImage
 from pygments import lex
 from pygments.lexers import get_lexer_by_name
@@ -17,8 +18,12 @@ tk._default_root = None
 # Palabras reservadas (deben coincidir con las definidas en lexico.py)
 reserved = {
     'if': 'IF', 'else': 'ELSE', 'end': 'END', 'do': 'DO', 'while': 'WHILE', 'switch': 'SWITCH',
-    'case': 'CASE', 'int': 'INT', 'float': 'FLOAT', 'main': 'MAIN', 'cin': 'CIN', 'cout': 'COUT'
+    'case': 'CASE', 'int': 'INT', 'float': 'FLOAT', 'main': 'MAIN', 'cin': 'CIN', 'cout': 'COUT', 'then': 'THEN',
+    'until': 'UNTIL', 'true': 'TRUE', 'false': 'FALSE'
 }
+
+
+
 
 class TextLineNumbers(tk.Canvas):
     def __init__(self, *args, **kwargs):
@@ -78,6 +83,14 @@ class CustomText(tk.Text):
         self._orig = self._w + "_orig"
         self.tk.call("rename", self._w, self._orig)
         self.tk.createcommand(self._w, self._proxy)
+        
+        #nodos a omitir
+        self.omit_nodes = {
+            'lista_declaracion',
+            'lista_identificadores', 
+            'lista_sentencias',
+        }
+            
         
         # Configuración del editor
         self.config(
@@ -160,6 +173,99 @@ class CustomText(tk.Text):
             # Limpiar tags en caso de error
             for tag in self.tag_names():
                 self.tag_remove(tag, "1.0", tk.END)
+                
+    
+    def _highlight_comments(self, text):
+        """Resalta los comentarios en el texto, incluyendo los multi-línea"""
+        in_block_comment = False
+        block_start = None
+        lines = text.split('\n')
+        
+        for i, line in enumerate(lines, start=1):
+            if not in_block_comment:
+                # Buscar inicio de comentario de bloque
+                block_start_pos = line.find('/*')
+                line_comment_pos = line.find('//')
+                
+                # Comentario de línea tiene prioridad si aparece antes
+                if line_comment_pos != -1 and (block_start_pos == -1 or line_comment_pos < block_start_pos):
+                    start = f"{i}.{line_comment_pos}"
+                    end = f"{i}.{len(line)}"
+                    self.tag_add("COMMENT", start, end)
+                elif block_start_pos != -1:
+                    # Encontramos inicio de comentario de bloque
+                    block_end_pos = line.find('*/', block_start_pos + 2)
+                    if block_end_pos != -1:
+                        # Comentario de bloque completo en una línea
+                        start = f"{i}.{block_start_pos}"
+                        end = f"{i}.{block_end_pos + 2}"
+                        self.tag_add("COMMENT", start, end)
+                    else:
+                        # Comentario de bloque continúa en siguientes líneas
+                        in_block_comment = True
+                        block_start = f"{i}.{block_start_pos}"
+            else:
+                # Estamos dentro de un comentario de bloque, buscar el cierre
+                block_end_pos = line.find('*/')
+                if block_end_pos != -1:
+                    # Fin del comentario de bloque
+                    end = f"{i}.{block_end_pos + 2}"
+                    self.tag_add("COMMENT", block_start, end)
+                    in_block_comment = False
+                    block_start = None
+                else:
+                    # Toda la línea es parte del comentario de bloque
+                    start = f"{i}.0"
+                    end = f"{i}.{len(line)}"
+                    self.tag_add("COMMENT", start, end)
+
+    def _highlight_other_tokens(self, text):
+        """Resalta otros tokens (operadores, números, etc.)"""
+        try:
+            # Usar lexer C++ para otros tokens
+            lexer = get_lexer_by_name("cpp", stripall=True)
+            
+            for token_type, value in lex(text, lexer):
+                # Saltar si ya es palabra reservada o comentario
+                if value in reserved or token_type in Token.Comment:
+                    continue
+                
+                # Determinar el tag apropiado
+                tag = None
+                if token_type in Token.Name:
+                    tag = "ID"
+                elif token_type in Token.Literal.Number.Integer:
+                    tag = "NUMBER"
+                elif token_type in Token.Literal.Number.Float:
+                    tag = "REAL"
+                elif token_type in Token.Operator:
+                    tag = "OPERATOR"
+                elif token_type in Token.Operator.Word:
+                    tag = "LOGICAL"
+                elif token_type in Token.Punctuation:
+                    tag = "SYMBOL"
+                
+                if not tag:
+                    continue
+
+                # Buscar todas las ocurrencias del valor
+                start = "1.0"
+                while True:
+                    start = self.search(re.escape(value), start, stopindex=tk.END, regexp=True)
+                    if not start:
+                        break
+                    end = f"{start}+{len(value)}c"
+                    
+                    # Verificar índices y que no sea parte de una palabra reservada o comentario
+                    if (self._is_valid_index(start) and self._is_valid_index(end) and 
+                        "COMMENT" not in self.tag_names(start)):
+                        self.tag_add(tag, start, end)
+                    start = end
+
+        except ClassNotFound:
+            pass
+        except Exception as e:
+            print(f"Error en el lexer: {e}")
 
     def _highlight_comments(self, text):
         """Resalta los comentarios en el texto, incluyendo los multi-línea"""
@@ -260,7 +366,36 @@ class CustomText(tk.Text):
             return True
         except tk.TclError:
             return False
+        
+    def _highlight_syntax_errors(self, errors, input_lines):
+        """Resalta los errores sintácticos en el editor"""
+        self.editor.tag_remove("ERROR", "1.0", tk.END)
+        
+        for error in errors:
+            # Extraer información de ubicación del error
+            if "línea" in error:
+                try:
+                    parts = error.split("línea")[1].split(",")
+                    line = int(parts[0].strip())
+                    col = int(parts[1].split(":")[0].replace("columna", "").strip())
+                    
+                    if 1 <= line <= len(input_lines):
+                        # Calcular posición de inicio y fin
+                        start = f"{line}.{col-1}"
+                        end = f"{line}.{col}"
+                        
+                        # Resaltar en el editor
+                        self.editor.tag_add("ERROR", start, end)
+                        self.editor.see(start)  # Hacer scroll a la posición del error
+                except (IndexError, ValueError):
+                    continue
 class IDE:
+    NODOS_OMITIR = {
+        'lista_declaracion',
+        'lista_identificadores', 
+        'lista_sentencias',
+    }
+     
     def __init__(self, root):
         self.root = root
         self.root.title("IDE para Compilador")
@@ -282,6 +417,7 @@ class IDE:
         self.create_editor_and_execution()
         self.create_cursor_indicator()
         self.create_error_window()
+        
 
     def create_menu(self):
         menubar = tk.Menu(self.root)
@@ -301,9 +437,7 @@ class IDE:
         compilemenu = tk.Menu(menubar, tearoff=0)
         compilemenu.add_command(label="Compilar Léxico", command=self.compile_lexico)
         compilemenu.add_command(label="Compilar Sintáctico", command=self.compile_sintactico)
-        compilemenu.add_command(label="Compilar Semántico", command=self.compile_semantico)
-        compilemenu.add_command(label="Generar Intermedio", command=self.compile_intermedio)
-        compilemenu.add_command(label="Ejecutar", command=self.compile_ejecucion)
+       
         menubar.add_cascade(label="Compilar", menu=compilemenu)
 
         self.root.config(menu=menubar)
@@ -399,18 +533,6 @@ class IDE:
         btn_sintactico.pack(side=tk.LEFT, padx=2, pady=2)
         self.add_tooltip(btn_sintactico, "Compilar Sintáctico")
 
-        btn_semantico = tk.Button(toolbar, text="Compilar Semántico", command=self.compile_semantico)
-        btn_semantico.pack(side=tk.LEFT, padx=2, pady=2)
-        self.add_tooltip(btn_semantico, "Compilar Semántico")
-
-        btn_intermedio = tk.Button(toolbar, text="Generar Intermedio", command=self.compile_intermedio)
-        btn_intermedio.pack(side=tk.LEFT, padx=2, pady=2)
-        self.add_tooltip(btn_intermedio, "Generar Código Intermedio")
-
-        btn_ejecucion = tk.Button(toolbar, text="Ejecutar", command=self.compile_ejecucion)
-        btn_ejecucion.pack(side=tk.LEFT, padx=2, pady=2)
-        self.add_tooltip(btn_ejecucion, "Ejecutar")
-
     def add_tooltip(self, widget, text):
         '''Agrega un tooltip (hover) a un widget'''
         def enter(event):
@@ -473,7 +595,7 @@ class IDE:
         
         self.token_tree = ttk.Treeview(
         token_frame, 
-        columns=("Lexema", "Token", "Subtokens"), 
+        columns=("Lexema", "Token"), 
         show="headings",
         selectmode="extended"
      )
@@ -481,12 +603,11 @@ class IDE:
         # Configurar columnas
         self.token_tree.column("Lexema", width=150, anchor=tk.W, stretch=tk.YES)
         self.token_tree.column("Token", width=120, anchor=tk.W, stretch=tk.YES)
-        # self.token_tree.column("Subtokens", width=200, anchor=tk.W, stretch=tk.YES)
-
+        
         # Configurar encabezados
         self.token_tree.heading("Lexema", text="LEXEMA", anchor=tk.W)
         self.token_tree.heading("Token", text="TOKEN", anchor=tk.W)
-        # self.token_tree.heading("Subtokens", text="SUBTOKEN", anchor=tk.W)
+        
         
         # Scrollbars
         vsb = ttk.Scrollbar(token_frame, orient="vertical", command=self.token_tree.yview)
@@ -502,19 +623,45 @@ class IDE:
         token_frame.grid_columnconfigure(0, weight=1)
         
         # ------------------------- Pestaña SINTÁCTICO -------------------------
+        
+        # Pestaña Sintáctico
         self.tab_sintactico = ttk.Frame(self.execution_tabs)
         self.execution_tabs.add(self.tab_sintactico, text="Sintáctico")
-        
-        self.output_sintactico = tk.Text(
-            self.tab_sintactico, 
-            wrap=tk.WORD, 
-            width=80, 
-            height=10,
-            bg="white",
-            fg="black",
-            font=("Consolas", 10)
+
+        # Contenedor para la tabla
+        sintactico_frame = tk.Frame(self.tab_sintactico)
+        sintactico_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        self.token_tree_sintactico = ttk.Treeview(
+            sintactico_frame,
+            columns=("Nodo", "Tipo", "Línea", "Columna"),
+            show="headings",
+            selectmode="extended"
         )
-        self.output_sintactico.pack(fill=tk.BOTH, expand=True)
+
+        # Columnas
+        self.token_tree_sintactico.column("Nodo", width=100, anchor=tk.W)
+        self.token_tree_sintactico.column("Tipo", width=100, anchor=tk.W)
+        self.token_tree_sintactico.column("Línea", width=80, anchor=tk.W)
+        self.token_tree_sintactico.column("Columna", width=80, anchor=tk.W)
+
+        # Encabezados
+        self.token_tree_sintactico.heading("Nodo", text="Nodo")
+        self.token_tree_sintactico.heading("Tipo", text="Tipo")
+        self.token_tree_sintactico.heading("Línea", text="Línea")
+        self.token_tree_sintactico.heading("Columna", text="Columna")
+
+        # Scrollbars
+        vsb_syn = ttk.Scrollbar(sintactico_frame, orient="vertical", command=self.token_tree_sintactico.yview)
+        hsb_syn = ttk.Scrollbar(sintactico_frame, orient="horizontal", command=self.token_tree_sintactico.xview)
+        self.token_tree_sintactico.configure(yscrollcommand=vsb_syn.set, xscrollcommand=hsb_syn.set)
+
+        # Diseño grid
+        self.token_tree_sintactico.grid(row=0, column=0, sticky="nsew")
+        vsb_syn.grid(row=0, column=1, sticky="ns")
+        hsb_syn.grid(row=1, column=0, sticky="ew")
+        sintactico_frame.grid_rowconfigure(0, weight=1)
+        sintactico_frame.grid_columnconfigure(0, weight=1)
         
         # ------------------------- Pestaña SEMÁNTICO -------------------------
         self.tab_semantico = ttk.Frame(self.execution_tabs)
@@ -657,7 +804,7 @@ class IDE:
                                     bg="white", 
                                     fg="black", 
                                     font=('Consolas', 9),
-                                    state=tk.DISABLED,  # Inicialmente en modo solo lectura
+                                    state=tk.NORMAL,  # Inicialmente en modo solo lectura
                                     padx=5, pady=5)
         
         # Scrollbar vertical
@@ -672,7 +819,62 @@ class IDE:
         self.output_errores.tag_config("error_header", foreground="red", font=('Arial', 10, 'bold'))
         self.output_errores.tag_config("error_detail", foreground="black", font=('Consolas', 9))
         self.output_errores.tag_config("no_errors", foreground="green", font=('Arial', 9, 'italic'))
+        
+        self._enable_copy_shortcut()
+        
+    def _enable_copy_shortcut(self):
+        """Habilita el atajo Ctrl+C para copiar texto seleccionado"""
+        def handle_copy(event):
+            if event.state & 4 and event.keysym.lower() == 'c':  # Ctrl+C
+                try:
+                    # Obtener texto seleccionado
+                    selected = self.output_errores.get(tk.SEL_FIRST, tk.SEL_LAST)
+                    self.root.clipboard_clear()
+                    self.root.clipboard_append(selected)
+                except tk.TclError:
+                    # Si no hay selección, no hacer nada
+                    pass
+            return "break"  # Evitar el comportamiento por defecto
+        
+        # Bindear el evento
+        self.output_errores.bind("<Control-c>", handle_copy)
+        self.output_errores.bind("<Control-C>", handle_copy)  # Mayúsculas
     
+    def _setup_copy_behavior(self):
+        """Configura el comportamiento de selección y copiado"""
+        # Permitir selección pero no modificación
+        self.output_errores.config(state=tk.DISABLED)
+        
+        def enable_selection(event):
+            # Cambiar temporalmente a NORMAL para seleccionar
+            self.output_errores.config(state=tk.NORMAL)
+            self.output_errores.tag_remove(tk.SEL, "1.0", tk.END)
+            return None
+        
+        def handle_copy(event):
+            if event.state & 4 and event.keysym.lower() == 'c':  # Ctrl+C
+                try:
+                    # Copiar selección al portapapeles
+                    selected = self.output_errores.get(tk.SEL_FIRST, tk.SEL_LAST)
+                    self.root.clipboard_clear()
+                    self.root.clipboard_append(selected)
+                except tk.TclError:
+                    pass  # No hay selección
+            return "break"
+        
+        def restore_state(event):
+            # Volver a estado DISABLED después de seleccionar
+            if str(self.output_errores.cget("state")) == "normal":
+                self.output_errores.config(state=tk.DISABLED)
+            return None
+        
+        # Bindings de eventos
+        self.output_errores.bind("<Button-1>", enable_selection)
+        self.output_errores.bind("<B1-Motion>", enable_selection)
+        self.output_errores.bind("<ButtonRelease-1>", restore_state)
+        self.output_errores.bind("<Control-c>", handle_copy)
+        self.output_errores.bind("<Control-C>", handle_copy)  # Mayúsculas    
+
     # Bloquear completamente la edición del panel
         def block_event(event):
             return "break"
@@ -869,41 +1071,438 @@ class IDE:
 
     
     def compile_sintactico(self):
-        self.output_sintactico.delete(1.0, tk.END)
+    # Limpiar resultados anteriores
+        self.token_tree_sintactico.delete(*self.token_tree_sintactico.get_children())
+        self.output_errores.config(state=tk.NORMAL)
         self.output_errores.delete(1.0, tk.END)
-        input_text = self.editor.get(1.0, tk.END)
-        try:
-            result = test_parser(input_text)
-            self.output_sintactico.insert(tk.END, f"Resultado: {result}\n")
-        except Exception as e:
-            self.output_errores.insert(tk.END, f"Error sintáctico: {e}\n")
-
-    def compile_semantico(self):
-        self.output_semantico.delete(1.0, tk.END)
-        self.output_errores.delete(1.0, tk.END)
-        input_text = self.editor.get(1.0, tk.END)
-        errors = test_semantics(input_text)
-        for error in errors:
-            self.output_semantico.insert(tk.END, f"{error}\n")
-            self.output_errores.insert(tk.END, f"Error semántico: {error}\n")
-
-    def compile_intermedio(self):
-        self.output_intermedio.delete(1.0, tk.END)
-        input_text = self.editor.get(1.0, tk.END)
-        ast = test_intermediate_code(input_text)
-        self.output_intermedio.insert(tk.END, f"Código intermedio generado: {ast}\n")
         
-    def compile_hash(self):
-        self.output_hash.delete(1.0, tk.END)
         input_text = self.editor.get(1.0, tk.END)
-        self.output_hash.insert(tk.END, "Hash generado.\n")
+        
+        try:
+            result = parse_code(input_text)
+            
+            self.output_errores.insert(tk.END, "=== ERRORES SINTÁCTICOS ===\n", "error_header")
+            
+            if result['success'] and result['ast']:
+                # Llenar la tabla con información del AST
+                self._fill_syntax_table(result['ast'])
+                
+                # Mostrar el árbol visual
+                self.show_ast(result['ast'])
+                
+                self.output_errores.insert(tk.END, "No se encontraron errores sintácticos.\n", "no_errors")
+            else:
+                error_count = 0
+                for error in result.get('errors', []):
+                    error_count += 1
+                    error_msg = ""
+                    if 'line' in error and 'column' in error:
+                        error_msg = f"Error {error_count}: Línea {error['line']}, Columna {error['column']}: {error['message']}\n"
+                    else:
+                        error_msg = f"Error {error_count}: {error.get('message', str(error))}\n"
+                    
+                    self.output_errores.insert(tk.END, error_msg, "error_detail")
+                
+                if error_count > 0:
+                    self.output_errores.insert(tk.END, f"\nTotal de errores sintácticos: {error_count}\n", "error_header")
+                
+                if input_text.strip():
+                    self._highlight_error_in_editor(result.get('errors', []), input_text)
+                    
+        except Exception as e:
+            error_msg = f"Error durante el análisis sintáctico: {str(e)}\n"
+            self.output_errores.insert(tk.END, error_msg, "error_detail")
+            import traceback
+            traceback.print_exc()
+        
+        self.output_errores.config(state=tk.DISABLED)
+        
+   
 
-    def compile_ejecucion(self):
-        self.output_ejecucion.delete(1.0, tk.END)
-        input_text = self.editor.get(1.0, tk.END)
-        self.output_ejecucion.insert(tk.END, "Ejecución completada.\n")
+    def _fill_syntax_table(self, ast_root):
+        """Llena la tabla de sintáctico con información del AST"""
+        self.token_tree_sintactico.delete(*self.token_tree_sintactico.get_children())
+
+        # Nodos que queremos omitir (mantenemos esta funcionalidad)
+        NODOS_OMITIR = {
+            'lista_declaracion',
+            'lista_identificadores', 
+            'lista_sentencias',
+        }
+
+        # Obtener el texto completo del editor para cálculo preciso de columnas
+        input_text = self.editor.get("1.0", tk.END)
+        lines = input_text.split('\n')
+
+        def calculate_column(lineno, lexpos):
+            """Función auxiliar para calcular la columna exacta"""
+            if lineno is None or lexpos is None:
+                return ''
+            
+            try:
+                # Obtener el texto completo
+                input_text = self.editor.get("1.0", tk.END)
+                lines = input_text.split('\n')
+                
+                # Asegurarnos que la línea existe
+                if 1 <= lineno <= len(lines):
+                    # Calcular la posición de inicio de la línea
+                    line_start_pos = 0
+                    for i in range(lineno - 1):
+                        line_start_pos += len(lines[i]) + 1  # +1 por el \n
+                    
+                    # Calcular columna (1-based)
+                    column = lexpos - line_start_pos + 1
+                    return max(1, column)  # Asegurar que sea al menos 1
+            except Exception as e:
+                print(f"Error calculando columna: {e}")
+            return ''
+
+        def traverse(node, parent=""):
+            if not isinstance(node, ASTNode):
+                return
+
+            # Si es un nodo que queremos omitir, procesamos sus hijos pero no lo mostramos
+            if node.type in NODOS_OMITIR:
+                if hasattr(node, 'children'):
+                    for child in node.children:
+                        traverse(child, parent)
+                return
+
+            # Columna "Nodo"
+            node_text = node.type
+            value = getattr(node, 'value', None)
+            if value is not None:
+                node_text += f" ({value})"
+                
+
+
+            # Columnas "Línea" y "Columna"
+            # restar total de lineas a linea obtenida
+            # para que coincida con la posición real en el editor
+            line = getattr(node, 'lineno', None)    
+            if line is not None:
+                line = max(1, line -  len(lines) + 1)  # Asegurar que sea al menos 1
+            else:
+                line = ''
+            lexpos = getattr(node, 'lexpos', '')
+            column = calculate_column(line, lexpos) if line and lexpos else ''
+
+            item = self.token_tree_sintactico.insert(
+                parent, "end",
+                values=(node_text, node.type, line, column)
+            )
+
+            if hasattr(node, 'children'):
+                for child in node.children:
+                    traverse(child, item)
+            
+            self.token_tree_sintactico.item(item, open=True)
+
+        if ast_root:
+            traverse(ast_root)
+        
+    def _create_error_tooltip(self, position, message):
+        """Crea un tooltip para mostrar el mensaje de error"""
+        bbox = self.editor.bbox(position)
+        if not bbox:
+            return
+            
+        x, y, _, _ = bbox
+        root_x = self.editor.winfo_rootx() + x
+        root_y = self.editor.winfo_rooty() + y
+        
+        tooltip = tk.Toplevel(self.editor)
+        tooltip.wm_overrideredirect(True)
+        tooltip.wm_geometry(f"+{root_x}+{root_y}")
+        
+        label = tk.Label(
+            tooltip, 
+            text=message, 
+            background="#ffffe0", 
+            relief="solid", 
+            borderwidth=1,
+            font=("Consolas", 9)
+        )
+        label.pack()
+        
+        # Auto-destruir después de 5 segundos
+        tooltip.after(5000, tooltip.destroy)
+
+    def _print_ast_structure(self, node, output_widget, level=0):
+        """Muestra la estructura del AST en formato de tabla (Nodo, Tipo, Línea, Columna)"""
+        indent = "  " * level
+        
+        # Obtener información del nodo
+        node_name = node.type
+        node_type = type(node).__name__
+        line = getattr(node, 'lineno', 'N/A')
+        column = getattr(node, 'lexpos', 'N/A')  # Nota: lexpos es la posición absoluta, no la columna
+        
+        # Si es un nodo hoja con valor, mostrarlo
+        value = getattr(node, 'value', '')
+        if value and not node.children:
+            node_name = f"{value} ({node_name})"
+        
+        # Formatear la línea como una fila de tabla
+        line_text = f"{indent}{node_name:<20} {node_type:<15} {str(line):<10} {str(column):<10}\n"
+        output_widget.insert(tk.END, line_text)
+        
+        # Recorrer hijos si existen
+        if hasattr(node, 'children'):
+            for child in node.children:
+                self._print_ast_structure(child, output_widget, level + 1)
+
+    def show_ast(self, ast_root):
+        """Muestra una ventana con el árbol sintáctico visual mejorado"""
+        ast_window = tk.Toplevel(self.root)
+        ast_window.title("Árbol Sintáctico Abstracto (AST)")
+        ast_window.geometry("1000x600")  # Ventana más grande para acomodar fuente grande
+        
+        # Configurar fuente grande
+        big_font = ('Helvetica', 18, 'bold')
+        
+        # Frame principal
+        main_frame = tk.Frame(ast_window)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Configurar estilo para Treeview con fuente grande
+        style = ttk.Style()
+        style.configure("Big.Treeview", font=big_font, rowheight=35)
+        style.configure("Big.Treeview.Heading", font=('Helvetica', 16, 'bold'))
+        
+        # Treeview para mostrar el AST
+        tree = ttk.Treeview(main_frame, style="Big.Treeview")
+        
+        # Scrollbar
+        scrollbar = ttk.Scrollbar(main_frame, orient="vertical", command=tree.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        tree.configure(yscrollcommand=scrollbar.set)
+        
+        tree.pack(fill=tk.BOTH, expand=True, side=tk.LEFT)
+        
+        # Construir el árbol visual mejorado
+        self._build_ast_tree(tree, "", ast_root)
+        
+        # Botones de control
+        btn_frame = tk.Frame(ast_window)
+        btn_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        ttk.Button(btn_frame, text="Expandir Todo", 
+                command=lambda: self._expand_tree(tree, "")).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Contraer Todo", 
+                command=lambda: self._collapse_tree(tree, "")).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Cerrar", 
+                command=ast_window.destroy).pack(side=tk.RIGHT, padx=5)
+
+    def _build_ast_tree(self, treeview, parent, node):
+        """Construye recursivamente el árbol visual mejorado"""
+        if not isinstance(node, ASTNode):
+            return
+            
+        # Obtener texto para cálculo de posición
+        input_text = self.editor.get("1.0", tk.END)
+        lines = input_text.split('\n')
+        total_lines = len(lines)
+        
+        # Omitir nodos no deseados
+        if node.type in self.NODOS_OMITIR:
+            for child in node.children:
+                self._build_ast_tree(treeview, parent, child)
+            return
+        
+        # Calcular línea ajustada
+        line = getattr(node, 'lineno', None)
+        line_text = ""
+        if line is not None:
+            adjusted_line = max(1, line - (total_lines - 1))
+            line_text = f" [Línea: {adjusted_line}]"
+        
+        # Caso especial: Incrementos/decrementos
+        
+        
+        # Caso especial: Asignaciones
+        if node.type == 'asignacion':
+            assign_text = f"={line_text}"
+            assign_id = treeview.insert(parent, "end", text=assign_text)
+            
+            # Variable asignada
+            var_node = node.children[0]
+            var_line = getattr(var_node, 'lineno', None)
+            var_line_text = f" [Línea: {max(1, var_line - (total_lines - 1))}]" if var_line else ""
+            treeview.insert(assign_id, "end", text=f"{var_node.value}{var_line_text}")
+            
+            # Expresión derecha
+            self._build_expr_tree(treeview, assign_id, node.children[1], total_lines)
+            return
+        
+        # Nodos normales
+        node_text = node.type
+        if hasattr(node, 'value') and node.value is not None:
+            node_text += f": {node.value}"
+        node_text += line_text
+        
+        node_id = treeview.insert(parent, "end", text=node_text)
+        
+        # Procesar hijos
+        if hasattr(node, 'children'):
+            for child in node.children:
+                self._build_ast_tree(treeview, node_id, child)
+    def _build_expr_tree(self, treeview, parent, node, total_lines):
+        """Versión final que muestra correctamente la jerarquía de operaciones"""
+        if not isinstance(node, ASTNode):
+            return
+
+        line = getattr(node, 'lineno', None)
+        line_text = f" [Línea: {max(1, line - (total_lines - 1))}]" if line is not None else ""
+
+        # Caso especial para asignaciones
+        if node.type == 'asignacion':
+            assign_id = treeview.insert(parent, "end", text=f"={line_text}")
+            
+            # Variable asignada
+            var_node = node.children[0]
+            var_line = getattr(var_node, 'lineno', line)
+            treeview.insert(assign_id, "end", text=f"{var_node.value} [Línea: {max(1, var_line - (total_lines - 1))}]")
+            
+            # Expresión derecha
+            self._build_expr_tree(treeview, assign_id, node.children[1], total_lines)
+            return
+
+        # Caso para operaciones binarias
+        if node.type == 'expresion_binaria':
+            # Solo mostrar operadores básicos, no nodos genéricos
+            if node.value in ['+', '-', '*', '/', '^']:
+                op_id = treeview.insert(parent, "end", text=f"{node.value}{line_text}")
+                
+                # Procesar operandos
+                for child in node.children:
+                    if isinstance(child, ASTNode):
+                        if child.type == 'expresion_binaria':
+                            self._build_expr_tree(treeview, op_id, child, total_lines)
+                        else:
+                            child_line = getattr(child, 'lineno', line)
+                            line_t = f" [Línea: {max(1, child_line - (total_lines - 1))}]" if child_line else ""
+                            treeview.insert(op_id, "end", text=f"{child.value}{line_t}")
+                    else:
+                        treeview.insert(op_id, "end", text=f"{child}{line_text}")
+                return
+            else:
+                # Para otros tipos de operaciones binarias, mostrar como nodo genérico
+                node_id = treeview.insert(parent, "end", text=f"{node.type}{line_text}")
+                for child in node.children:
+                    self._build_expr_tree(treeview, node_id, child, total_lines)
+                return
+
+        # Caso para identificadores y literales
+        if node.type in ['identificador', 'numero'] or (hasattr(node, 'value')) and not node.children:
+            treeview.insert(parent, "end", text=f"{node.value}{line_text}")
+            return
+
+        # Caso genérico para otros nodos
+        node_id = treeview.insert(parent, "end", text=f"{node.type}{line_text}")
+        for child in node.children:
+            self._build_expr_tree(treeview, node_id, child, total_lines)
+            
+        def _insert_child(self, treeview, parent_id, child, parent_line, total_lines):
+            """Método auxiliar simplificado para insertar hijos"""
+            if isinstance(child, ASTNode):
+                child_line = getattr(child, 'lineno', parent_line)
+                line_text = f" [Línea: {max(1, child_line - (total_lines - 1))}]" if child_line is not None else ""
+                
+                if hasattr(child, 'value') and not getattr(child, 'children', []):
+                    treeview.insert(parent_id, "end", text=f"{child.value}{line_text}")
+                else:
+                    self._build_expr_tree(treeview, parent_id, child, total_lines)
+            else:
+                line_text = f" [Línea: {max(1, parent_line - (total_lines - 1))}]" if parent_line is not None else ""
+                treeview.insert(parent_id, "end", text=f"{child}{line_text}")
+    
+    
+                
+        # def _build_expr_tree(self, treeview, parent, node, total_lines):
+        # """Construye subárbol para expresiones"""
+        # if not isinstance(node, ASTNode):
+        #     return
+        
+        # line = getattr(node, 'lineno', None)
+        # line_text = f" [Línea: {max(1, line - (total_lines - 1))}]" if line else ""
+        
+        # if node.type == 'expresion_binaria':
+        #     op_text = f"{node.value}{line_text}"
+        #     op_id = treeview.insert(parent, "end", text=op_text)
+            
+        #     for child in node.children:
+        #         self._build_expr_tree(treeview, op_id, child, total_lines)
+        # else:
+        #     node_text = f"{node.value if hasattr(node, 'value') else node.type}{line_text}"
+        #     treeview.insert(parent, "end", text=node_text)
+        
+
+    def _expand_tree(self, tree, item):
+        """Expande todos los nodos del árbol"""
+        children = tree.get_children(item)
+        for child in children:
+            self._expand_tree(tree, child)
+        tree.item(item, open=True)
+
+    def _collapse_tree(self, tree, item):
+        """Contrae todos los nodos del árbol"""
+        children = tree.get_children(item)
+        for child in children:
+            self._collapse_tree(tree, child)
+        tree.item(item, open=False)
+
+   
+
+   
+
+    def _highlight_error_in_editor(self, errors, input_text=None):
+        """Resalta errores en el editor con ubicación precisa"""
+        if input_text is None:
+            input_text = self.editor.get("1.0", tk.END)
+        
+        input_lines = input_text.split('\n')
+        self.editor.tag_remove("ERROR", "1.0", tk.END)
+        
+        for error in errors:
+            try:
+                line = error.get('line', 1)
+                column = error.get('column', 1)
+                
+                # Ajustar para índices basados en 1 vs basados en 0
+                line = max(1, int(line))
+                column = max(1, int(column))
+                
+                # Verificar que la línea existe
+                if line > len(input_lines):
+                    continue
+                    
+                current_line = input_lines[line-1]
+                
+                # Ajustar columna si es mayor que la longitud de la línea
+                column = min(column, len(current_line)+1)
+                
+                # Para errores de punto y coma faltante, resaltar el final del token anterior
+                if error.get('token_type') == 'SEMICOLON' and error.get('value') == ';':
+                    start_pos = f"{line}.{column-1}"
+                    end_pos = f"{line}.{column}"
+                else:
+                    start_pos = f"{line}.{column-1}"
+                    end_pos = f"{line}.{column}"
+                
+                # Verificar que la posición es válida
+                if self.editor._is_valid_index(start_pos):
+                    self.editor.tag_add("ERROR", start_pos, end_pos)
+                    self.editor.see(start_pos)
+                    
+            except (ValueError, KeyError, tk.TclError) as e:
+                print(f"Error al resaltar: {str(e)}")
+                continue
+
 
 if __name__ == "__main__":
     root = tk.Tk()
     ide = IDE(root)
     root.mainloop()
+
