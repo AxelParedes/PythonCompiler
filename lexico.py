@@ -1,21 +1,21 @@
 import ply.lex as lex
 
 reserved = {
-    'if': 'IF', 'else': 'ELSE', 'end': 'END', 'do': 'DO', 'while': 'WHILE',
-    'switch': 'SWITCH', 'case': 'CASE', 'int': 'INT', 'float': 'FLOAT',
-    'main': 'MAIN', 'cin': 'CIN', 'cout': 'COUT', 'then': 'THEN', 'until': 'UNTIL', 'bool': 'BOOL',
+    'if': 'IF', 'else': 'ELSE', 'end': 'END', 'do': 'DO', 'while': 'WHILE', 'for': 'FOR', 'default': 'DEFAULT',
+    'switch': 'SWITCH', 'case': 'CASE', 'int': 'INT', 'float': 'FLOAT', 'function': 'FUNCTION', 'return': 'RETURN', 'void': 'VOID', 'params': 'PARAMS',
+    'main': 'MAIN', 'cin': 'CIN', 'cout': 'COUT', 'then': 'THEN', 'until': 'UNTIL', 'bool': 'BOOL', 'true': 'TRUE', 'false': 'FALSE', 'string': 'STRING'
 }
 
 tokens = [
     'NUMBER', 'REAL', 'ID', 'ERROR',
     'PLUS', 'MIN', 'TIMES', 'DIVIDE', 'MODULO', 'POWER',
     'LT', 'LE', 'GT', 'GE', 'NE', 'EQ', 'EEQ',
-    'AND', 'OR', 'NOT', 'DO', 'OP_IN', 
+    'AND', 'OR', 'NOT', 'DO', 'OP_IN', 'FOR', 'DEFAULT', 'COLON',
     'OP_OUT','LPAREN', 'RPAREN', 'LBRACE', 'RBRACE',
     'COMMA', 'SEMICOLON', 'THEN', 'UNTIL', 'END', 'IF',
     'ELSE', 'DO', 'WHILE', 'SWITCH', 'CASE',
-    'INCREMENT', 'DECREMENT', 'LSHIFT', 'RSHIFT', 'STRING', 
-    'BOOL', 'TRUE', 'FALSE', 'ASSIGN', 'INT', 'FLOAT', 'BOOL'
+    'INCREMENT', 'DECREMENT', 'LSHIFT', 'RSHIFT', 'STRING', 'STRING_LITERAL', 
+    'BOOL', 'TRUE', 'FALSE', 'ASSIGN', 'INT', 'FLOAT', 'BOOL','FUNCTION', 'RETURN', 'VOID', 'PARAMS'
 ] + list(reserved.values())
 
 # Operadores y símbolos
@@ -45,8 +45,10 @@ t_COMMA = r','
 t_SEMICOLON = r';'
 t_INCREMENT = r'\+\+'
 t_DECREMENT = r'--'
-
-t_STRING = r'\".*?\"'
+t_FUNCTION = r'function'
+t_RETURN = r'return'
+t_VOID = r'void'
+t_PARAMS = r'params'
 t_THEN = r'then'
 t_UNTIL = r'until'
 t_END = r'end'
@@ -54,12 +56,35 @@ t_ELSE = r'else'
 t_IF = r'if'
 t_DO = r'do'
 t_WHILE = r'while'
+t_SWITCH = r'switch'
+t_CASE = r'case'
+t_DEFAULT = r'default'
+t_FOR = r'for'
+t_COLON = r':'
+
+
 
 # Tokens numéricos
 def t_REAL(t):
     r'\d+\.\d+'
     t.value = float(t.value)
     return t
+
+
+def t_STRING_LITERAL(t):
+    r'\"([^\\\"]|\\.)*\"'
+    t.value = t.value[1:-1]  # Remover las comillas
+    return t
+
+def t_TRUE(t):
+    r'true'
+    return t
+
+def t_FALSE(t):
+    r'false'
+    return t
+
+
 
 def t_ERROR_REAL(t):
     r'\d+\.(?=\D|$)'
