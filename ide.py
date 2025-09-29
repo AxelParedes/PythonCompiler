@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 from setuptools import Command
+from semantico import test_semantics
 from sintactico import ASTNode, parse_code
 from lexico import test_lexer
 from sintactico import parse_code
@@ -12,6 +13,7 @@ from pygments.token import Token
 from pygments.style import Style
 from pygments.util import ClassNotFound
 import re
+
 tk._default_root = None
 
 
@@ -19,7 +21,7 @@ tk._default_root = None
 reserved = {
     'if': 'IF', 'else': 'ELSE', 'end': 'END', 'do': 'DO', 'while': 'WHILE', 'switch': 'SWITCH',
     'case': 'CASE', 'int': 'INT', 'float': 'FLOAT', 'main': 'MAIN', 'cin': 'CIN', 'cout': 'COUT', 'then': 'THEN',
-    'until': 'UNTIL', 'true': 'TRUE', 'false': 'FALSE'
+    'until': 'UNTIL', 'true': 'TRUE', 'false': 'FALSE', 'bool': 'BOOL', 'string': 'STRING', 'error': 'ERROR',
 }
 
 
@@ -115,6 +117,8 @@ class CustomText(tk.Text):
         self.tag_config("LOGICAL", foreground="orange")
         self.tag_config("SYMBOL", foreground="brown")
         self.tag_config("ASSIGN", foreground="darkgreen")
+        self.tag_config("STRING", foreground="darkorange")
+        self.tag_config("BOOL", foreground="purple", font=("Consolas", 10, "bold"))
         self.tag_config("ERROR", foreground="red", underline=True)
 
         # Configurar eventos
@@ -244,6 +248,10 @@ class CustomText(tk.Text):
                     tag = "LOGICAL"
                 elif token_type in Token.Punctuation:
                     tag = "SYMBOL"
+                elif token_type in Token.Literal.String:
+                    tag = "STRING"
+                elif token_type in Token.Literal.Boolean:
+                    tag = "BOOL"
                 
                 if not tag:
                     continue
@@ -502,6 +510,8 @@ class IDE:
                            command=self.root.quit)
         btn_exit.pack(side=tk.LEFT, padx=2, pady=2)
         self.add_tooltip(btn_exit, "Salir")
+        
+        
 
         # Separador
         separator = ttk.Separator(toolbar, orient=tk.VERTICAL)
@@ -532,6 +542,11 @@ class IDE:
         btn_sintactico = tk.Button(toolbar, text="Compilar Sintáctico", command=self.compile_sintactico)
         btn_sintactico.pack(side=tk.LEFT, padx=2, pady=2)
         self.add_tooltip(btn_sintactico, "Compilar Sintáctico")
+        
+        # En el método create_toolbar de la clase IDE, agregar:
+        btn_semantico = tk.Button(toolbar, text="Compilar Semántico", command=self.compile_semantico)
+        btn_semantico.pack(side=tk.LEFT, padx=2, pady=2)
+        self.add_tooltip(btn_semantico, "Compilar Semántico")
 
     def add_tooltip(self, widget, text):
         '''Agrega un tooltip (hover) a un widget'''
@@ -677,6 +692,34 @@ class IDE:
             font=("Consolas", 10)
         )
         self.output_semantico.pack(fill=tk.BOTH, expand=True)
+        
+        # En la clase IDE, en el método create_editor_and_execution, añadir una pestaña para el árbol semántico
+
+        # ------------------------- Pestaña ÁRBOL SEMÁNTICO -------------------------
+        self.tab_semantic_tree = ttk.Frame(self.execution_tabs)
+        self.execution_tabs.add(self.tab_semantic_tree, text="Árbol Semántico")
+
+        # Crear un Treeview para mostrar el árbol semántico
+        self.semantic_tree = ttk.Treeview(self.tab_semantic_tree, columns=("Valor", "Tipo", "Línea"), show="tree headings")
+        self.semantic_tree.column("#0", width=200, anchor=tk.W)  # Columna para la jerarquía
+        self.semantic_tree.column("Valor", width=100, anchor=tk.W)
+        self.semantic_tree.column("Tipo", width=100, anchor=tk.W)
+        self.semantic_tree.column("Línea", width=50, anchor=tk.W)
+
+        self.semantic_tree.heading("#0", text="Nodo")
+        self.semantic_tree.heading("Valor", text="Valor")
+        self.semantic_tree.heading("Tipo", text="Tipo")
+        self.semantic_tree.heading("Línea", text="Línea")
+
+        # Scrollbars
+        semantic_vsb = ttk.Scrollbar(self.tab_semantic_tree, orient="vertical", command=self.semantic_tree.yview)
+        semantic_hsb = ttk.Scrollbar(self.tab_semantic_tree, orient="horizontal", command=self.semantic_tree.xview)
+        self.semantic_tree.configure(yscrollcommand=semantic_vsb.set, xscrollcommand=semantic_hsb.set)
+
+        # Empaquetar
+        self.semantic_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        semantic_vsb.pack(side=tk.RIGHT, fill=tk.Y)
+        semantic_hsb.pack(side=tk.BOTTOM, fill=tk.X)
         
         # ------------------------- Pestaña INTERMEDIO -------------------------
         self.tab_intermedio = ttk.Frame(self.execution_tabs)
@@ -1117,90 +1160,173 @@ class IDE:
         
         self.output_errores.config(state=tk.DISABLED)
         
-   
-
-    def _fill_syntax_table(self, ast_root):
-        """Llena la tabla de sintáctico con información del AST"""
+    def _fill_syntax_table(self, ast_node):
+        """Llena la tabla sintáctica con la información del AST"""
         self.token_tree_sintactico.delete(*self.token_tree_sintactico.get_children())
-
-        # Nodos que queremos omitir (mantenemos esta funcionalidad)
-        NODOS_OMITIR = {
-            'lista_declaracion',
-            'lista_identificadores', 
-            'lista_sentencias',
-        }
-
-        # Obtener el texto completo del editor para cálculo preciso de columnas
-        input_text = self.editor.get("1.0", tk.END)
-        lines = input_text.split('\n')
-
-        def calculate_column(lineno, lexpos):
-            """Función auxiliar para calcular la columna exacta"""
-            if lineno is None or lexpos is None:
-                return ''
-            
-            try:
-                # Obtener el texto completo
-                input_text = self.editor.get("1.0", tk.END)
-                lines = input_text.split('\n')
-                
-                # Asegurarnos que la línea existe
-                if 1 <= lineno <= len(lines):
-                    # Calcular la posición de inicio de la línea
-                    line_start_pos = 0
-                    for i in range(lineno - 1):
-                        line_start_pos += len(lines[i]) + 1  # +1 por el \n
-                    
-                    # Calcular columna (1-based)
-                    column = lexpos - line_start_pos + 1
-                    return max(1, column)  # Asegurar que sea al menos 1
-            except Exception as e:
-                print(f"Error calculando columna: {e}")
-            return ''
-
-        def traverse(node, parent=""):
+        
+        def add_ast_node(parent, node, level=0):
             if not isinstance(node, ASTNode):
                 return
-
-            # Si es un nodo que queremos omitir, procesamos sus hijos pero no lo mostramos
-            if node.type in NODOS_OMITIR:
-                if hasattr(node, 'children'):
-                    for child in node.children:
-                        traverse(child, parent)
-                return
-
-            # Columna "Nodo"
-            node_text = node.type
-            value = getattr(node, 'value', None)
-            if value is not None:
-                node_text += f" ({value})"
                 
-
-
-            # Columnas "Línea" y "Columna"
-            # restar total de lineas a linea obtenida
-            # para que coincida con la posición real en el editor
-            line = getattr(node, 'lineno', None)    
-            if line is not None:
-                line = max(1, line -  len(lines) + 1)  # Asegurar que sea al menos 1
-            else:
-                line = ''
-            lexpos = getattr(node, 'lexpos', '')
-            column = calculate_column(line, lexpos) if line and lexpos else ''
-
-            item = self.token_tree_sintactico.insert(
-                parent, "end",
-                values=(node_text, node.type, line, column)
+            # Omitir nodos de lista
+            if node.type in self.NODOS_OMITIR:
+                for child in node.children:
+                    add_ast_node(parent, child, level)
+                return
+            
+            # Información del nodo
+            node_name = node.type
+            node_value = getattr(node, 'value', '')
+            line = getattr(node, 'lineno', 'N/A')
+            
+            # Para identificadores y números, mostrar el valor
+            if node.type in ['identificador', 'numero'] and node_value:
+                node_name = f"{node_value} ({node.type})"
+            elif node_value and node.type != 'tipo':
+                node_name = f"{node.type}: {node_value}"
+            
+            # Insertar en la tabla
+            node_id = self.token_tree_sintactico.insert(
+                parent, "end", 
+                text=node_name,
+                values=(node.type, node_value, line, level)
             )
-
+            
+            # Procesar hijos
             if hasattr(node, 'children'):
                 for child in node.children:
-                    traverse(child, item)
-            
-            self.token_tree_sintactico.item(item, open=True)
+                    add_ast_node(node_id, child, level + 1)
+        
+        add_ast_node("", ast_node)
+        
+    
+    
+        
 
-        if ast_root:
-            traverse(ast_root)
+    def compile_semantico(self):
+        """Ejecuta el análisis semántico y muestra resultados"""
+        try:
+            # Limpiar resultados anteriores
+            self.output_errores.config(state=tk.NORMAL)
+            self.output_errores.delete(1.0, tk.END)
+            self.output_semantico.config(state=tk.NORMAL)
+            self.output_semantico.delete(1.0, tk.END)
+            
+            # Limpiar árbol semántico
+            self.semantic_tree.delete(*self.semantic_tree.get_children())
+            
+            # Obtener texto actual
+            input_text = self.editor.get(1.0, tk.END)
+            
+            if not input_text.strip():
+                self.output_errores.insert(tk.END, "El editor está vacío.\n")
+                self.output_errores.config(state=tk.DISABLED)
+                self.output_semantico.config(state=tk.DISABLED)
+                return
+                
+            # Ejecutar análisis semántico
+            from semantico import test_semantics
+            result = test_semantics(input_text)
+            
+            # Mostrar resultados en panel de errores
+            self.output_errores.insert(tk.END, "=== RESULTADOS DEL ANÁLISIS SEMÁNTICO ===\n", "error_header")
+            
+            if result['errors']:
+                self.output_errores.insert(tk.END, f"Se encontraron {len(result['errors'])} error(es):\n\n", "error_header")
+                for i, error in enumerate(result['errors'], 1):
+                    self.output_errores.insert(tk.END, f"{i}. {error}\n", "error_detail")
+            else:
+                self.output_errores.insert(tk.END, "✓ No se encontraron errores semánticos.\n", "no_errors")
+            
+            # Mostrar tabla de símbolos
+            self.output_semantico.insert(tk.END, "=== TABLA DE SÍMBOLOS ===\n", "header")
+            
+            if result['symbol_table']:
+                for symbol in result['symbol_table']:
+                    symbol_info = f"Nombre: {symbol['nombre']}, Tipo: {symbol['tipo']}, Alcance: {symbol['alcance']}, Línea: {symbol['linea']}\n"
+                    self.output_semantico.insert(tk.END, symbol_info)
+            else:
+                self.output_semantico.insert(tk.END, "No se encontraron símbolos.\n")
+            
+            # Mostrar árbol semántico
+            if result['semantic_tree']:
+                self._display_semantic_tree(result['semantic_tree'])
+            
+            self.output_errores.config(state=tk.DISABLED)
+            self.output_semantico.config(state=tk.DISABLED)
+            
+        except Exception as e:
+            self.output_errores.config(state=tk.NORMAL)
+            self.output_errores.insert(tk.END, f"Error durante análisis semántico: {str(e)}\n", "error_detail")
+            self.output_errores.config(state=tk.DISABLED)
+            import traceback
+            traceback.print_exc()
+
+    def _display_semantic_tree(self, semantic_tree):
+        """Muestra el árbol semántico en el Treeview"""
+        self.semantic_tree.delete(*self.semantic_tree.get_children())
+        
+        def add_node(parent, node):
+            if node is None:
+                return
+                
+            # Crear texto del nodo
+            node_text = node['type']
+            if node['value'] is not None:
+                node_text += f": {node['value']}"
+            
+            # Información adicional
+            additional_info = ""
+            if 'inferred_type' in node:
+                additional_info += f" Tipo: {node['inferred_type']}"
+            if 'symbol_info' in node:
+                additional_info += f" Símbolo: {node['symbol_info']['type']}"
+            
+            node_id = self.semantic_tree.insert(
+                parent, "end", 
+                text=node_text,
+                values=(
+                    node.get('value', ''),
+                    node['type'],
+                    node.get('line', '')
+                )
+            )
+            
+            # Procesar hijos
+            for child in node.get('children', []):
+                add_node(node_id, child)
+        
+        # Construir el árbol
+        add_node("", semantic_tree)
+        
+        # Expandir los primeros niveles
+        for child in self.semantic_tree.get_children():
+            self.semantic_tree.item(child, open=True)
+
+    #     Método para mostrar el árbol semántico en el Treeview
+    # def _display_semantic_tree(self, semantic_tree):
+    #         """Muestra el árbol semántico en el Treeview"""
+    #         self.semantic_tree.delete(*self.semantic_tree.get_children())
+    #         self._add_semantic_tree_node("", semantic_tree.root)
+            
+
+    # def _add_semantic_tree_node(self, parent, node):
+    #         """Añade un nodo del árbol semántico al Treeview"""
+    #         if node is None:
+    #             return
+
+    #         node_text = node['type']
+    #         if node['value'] is not None:
+    #             node_text += f" ({node['value']})"
+
+    #         node_id = self.semantic_tree.insert(
+    #             parent, "end", 
+    #             text=node_text,
+    #             values=(node['value'], node['type'], node['line'])
+    #         )
+
+    #         for child in node['children']:
+    #             self._add_semantic_tree_node(node_id, child)
         
     def _create_error_tooltip(self, position, message):
         """Crea un tooltip para mostrar el mensaje de error"""

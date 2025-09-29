@@ -3,7 +3,7 @@ import ply.lex as lex
 reserved = {
     'if': 'IF', 'else': 'ELSE', 'end': 'END', 'do': 'DO', 'while': 'WHILE',
     'switch': 'SWITCH', 'case': 'CASE', 'int': 'INT', 'float': 'FLOAT',
-    'main': 'MAIN', 'cin': 'CIN', 'cout': 'COUT', 'then': 'THEN', 'until': 'UNTIL'
+    'main': 'MAIN', 'cin': 'CIN', 'cout': 'COUT', 'then': 'THEN', 'until': 'UNTIL', 'bool': 'BOOL',
 }
 
 tokens = [
@@ -15,7 +15,7 @@ tokens = [
     'COMMA', 'SEMICOLON', 'THEN', 'UNTIL', 'END', 'IF',
     'ELSE', 'DO', 'WHILE', 'SWITCH', 'CASE',
     'INCREMENT', 'DECREMENT', 'LSHIFT', 'RSHIFT', 'STRING', 
-    'BOOL', 'TRUE', 'FALSE', 'ASSIGN'
+    'BOOL', 'TRUE', 'FALSE', 'ASSIGN', 'INT', 'FLOAT', 'BOOL'
 ] + list(reserved.values())
 
 # Operadores y símbolos
@@ -131,5 +131,3 @@ def test_lexer(input_text):
     print(f"Tokens guardados en archivo temporal: {temp_file.name}")
     
     return tokens
-
-#
