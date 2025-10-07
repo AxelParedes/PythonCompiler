@@ -17,7 +17,6 @@ import re
 tk._default_root = None
 
 
-# Palabras reservadas (deben coincidir con las definidas en lexico.py)
 reserved = {
     'if': 'IF', 'else': 'ELSE', 'end': 'END', 'do': 'DO', 'while': 'WHILE', 'switch': 'SWITCH',
     'case': 'CASE', 'int': 'INT', 'float': 'FLOAT', 'main': 'MAIN', 'cin': 'CIN', 'cout': 'COUT', 'then': 'THEN',
