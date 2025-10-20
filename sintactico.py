@@ -160,18 +160,18 @@ def p_default_case(p):
 def p_seleccion(p):
     '''seleccion : IF expresion THEN LBRACE lista_declaraciones RBRACE
                  | IF expresion THEN LBRACE lista_declaraciones RBRACE ELSE LBRACE lista_declaraciones RBRACE
-                 | IF LPAREN expresion RPAREN sentencia
-                 | IF LPAREN expresion RPAREN sentencia ELSE sentencia
+                 | IF LPAREN expresion RPAREN LBRACE lista_declaraciones RBRACE
+                 | IF LPAREN expresion RPAREN LBRACE lista_declaraciones RBRACE ELSE LBRACE lista_declaraciones RBRACE
                  | SWITCH LPAREN expresion RPAREN LBRACE casos RBRACE'''
     
     if len(p) == 7 and p[1] == 'if':  # if-then sin else
         p[0] = ASTNode('if_then', children=[p[2], p[5]], lineno=p.lineno(1))
     elif len(p) == 11:  # if-then con else
         p[0] = ASTNode('if_then_else', children=[p[2], p[5], p[9]], lineno=p.lineno(1))
-    elif len(p) == 6 and p[1] == 'if':  # if con paréntesis sin else
-        p[0] = ASTNode('if', children=[p[3], p[5]], lineno=p.lineno(1))
-    elif len(p) == 8 and p[1] == 'if':  # if con paréntesis con else
-        p[0] = ASTNode('if_else', children=[p[3], p[5], p[7]], lineno=p.lineno(1))
+    elif len(p) == 8 and p[1] == 'if':  # if con paréntesis sin else
+        p[0] = ASTNode('if', children=[p[3], p[6]], lineno=p.lineno(1))
+    elif len(p) == 10 and p[1] == 'if':  # if con paréntesis con else
+        p[0] = ASTNode('if_else', children=[p[3], p[6], p[9]], lineno=p.lineno(1))
     else:  # switch
         p[0] = ASTNode('switch', children=[p[3], p[6]], lineno=p.lineno(1))
 

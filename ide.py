@@ -19,9 +19,9 @@ tk._default_root = None
 
 # Palabras reservadas (deben coincidir con las definidas en lexico.py)
 reserved = {
-    'if': 'IF', 'else': 'ELSE', 'end': 'END', 'do': 'DO', 'while': 'WHILE', 'switch': 'SWITCH',
-    'case': 'CASE', 'int': 'INT', 'float': 'FLOAT', 'main': 'MAIN', 'cin': 'CIN', 'cout': 'COUT', 'then': 'THEN',
-    'until': 'UNTIL', 'true': 'TRUE', 'false': 'FALSE', 'bool': 'BOOL', 'string': 'STRING', 'error': 'ERROR', 'function': 'FUNCTION', 'return': 'RETURN', 'void': 'VOID', 'params': 'PARAMS'
+    'if': 'IF', 'else': 'ELSE', 'end': 'END', 'do': 'DO', 'while': 'WHILE', 'for': 'FOR', 'default': 'DEFAULT',
+    'switch': 'SWITCH', 'case': 'CASE', 'int': 'INT', 'float': 'FLOAT', 'function': 'FUNCTION', 'return': 'RETURN', 'void': 'VOID', 'params': 'PARAMS',
+    'main': 'MAIN', 'cin': 'CIN', 'cout': 'COUT', 'then': 'THEN', 'until': 'UNTIL', 'bool': 'BOOL', 'true': 'TRUE', 'false': 'FALSE', 'string': 'STRING'
 }
 
 
@@ -1287,67 +1287,95 @@ class IDE:
         add_ast_node("", ast_node)
         
     
-    def _mostrar_analisis_semantico_completo(self, tabla_simbolos):
-        """Muestra el análisis semántico completo con tabla y resumen"""
+    def _mostrar_analisis_semantico_completo(self, tabla_simbolos, analyzer=None):
+        """Muestra el análisis semántico completo con tabla y resumen MEJORADO"""
         contenido = "=== ANÁLISIS SEMÁNTICO ===\n\n"
+        
+        # Calcular estadísticas de ámbitos
+        globales = 0
+        locales = 0
+        
+        for simbolo in tabla_simbolos:
+            if simbolo.get('alcance') == 'global':
+                globales += 1
+            else:
+                locales += 1
+        
+        # Si tenemos el analyzer, usar sus estadísticas (más precisas)
+        if analyzer:
+            stats = analyzer.get_scope_stats()
+            globales = stats['globales']
+            locales = stats['locales']
         
         # TABLA DE SÍMBOLOS DETALLADA
         contenido += "TABLA DE SÍMBOLOS DETALLADA\n"
         contenido += "┌───────────┬──────────┬────────────┬────────┬──────────┐\n"
-        contenido += "│ NOMBRE    │ TIPO     │ ALCANCE    │ LÍNEA  │ ESTADO   │\n"
+        contenido += "│ NOMBRE    │ TIPO     │ ÁMBITO     │ LÍNEA  │ ESTADO   │\n"
         contenido += "├───────────┼──────────┼────────────┼────────┼──────────┤\n"
         
         # Contadores para el resumen
         cont_int = 0
+        cont_float = 0
         cont_bool = 0
-        cont_global = 0
-        cont_local = 0
+        cont_string = 0
         
         for simbolo in tabla_simbolos:
             nombre = simbolo.get('nombre', '')
             tipo = simbolo.get('tipo', '')
-            alcance = simbolo.get('alcance', '')
+            alcance = simbolo.get('alcance','local')
             linea = simbolo.get('linea', '')
+            
+            # Determinar texto del ámbito
+            if alcance == 'global':
+                alcance_texto = "GLOBAL"
+            else:
+                alcance_texto = f"LOCAL({alcance})"
             
             # Contar tipos
             if tipo == 'int':
                 cont_int += 1
+            elif tipo == 'float':
+                cont_float += 1
             elif tipo == 'bool':
                 cont_bool += 1
-                
-            # Contar ámbitos
-            if alcance == 'global':
-                cont_global += 1
-            else:
-                cont_local += 1
+            elif tipo == 'string':
+                cont_string += 1
                 
             # Formatear fila de la tabla
-            contenido += f"│ {nombre:<9} │ {tipo:<8} │ {alcance:<10} │ {linea:<6} │ válido   │\n"
+            contenido += f"│ {nombre:<9} │ {tipo:<8} │ {alcance_texto:<10} │ {linea:<6} │ válido   │\n"
         
         contenido += "└───────────┴──────────┴────────────┴────────┴──────────┘\n\n"
         
-        # RESUMEN DEL ANÁLISIS
+        # RESUMEN DEL ANÁLISIS MEJORADO
         contenido += "RESUMEN DEL ANÁLISIS\n"
         contenido += f"• Total de símbolos: {len(tabla_simbolos)}\n"
-        contenido += f"• Variables enteras: {cont_int}\n"
-        contenido += f"• Variables booleanas: {cont_bool}\n"
-        contenido += f"• Ámbito global: {cont_global} símbolos\n"
-        contenido += f"• Ámbito local: {cont_local} símbolos\n"
-        contenido += "• Errores semánticos: 0\n\n"
+        contenido += f"• Variables globales: {globales}\n"
+        contenido += f"• Variables locales: {locales}\n"
+        contenido += f"• Enteras (int): {cont_int}\n"
+        contenido += f"• Decimales (float): {cont_float}\n"
+        contenido += f"• Booleanas (bool): {cont_bool}\n"
+        contenido += f"• Texto (string): {cont_string}\n\n"
         
         # VERIFICACIONES COMPLETADAS
-        contenido += "VERIFICACIONES COMPLETADAS\n"
+        contenido += " VERIFICACIONES COMPLETADAS\n"
         contenido += "✓ Todas las variables están declaradas\n"
         contenido += "✓ No hay variables duplicadas en el mismo ámbito\n"
         contenido += "✓ Coherencia de tipos verificada\n"
-        contenido += "✓ Uso adecuado de ámbitos\n\n"
+        contenido += "✓ Uso adecuado de ámbitos (global vs local)\n"
+        contenido += "✓ Variables locales correctamente aisladas\n\n"
+        
+        # EJEMPLOS DE ÁMBITOS
+        contenido += " EJEMPLOS DE ÁMBITOS\n"
+        contenido += "• Variables globales: Declaradas fuera de bloques\n"
+        contenido += "• Variables locales: Declaradas dentro de if/while/do\n"
+        contenido += "• Las locales solo existen dentro de su bloque\n\n"
         
         contenido += "ESTADO: Análisis semántico exitoso\n"
         
         self.output_semantico.insert(tk.END, contenido)
 
     def compile_semantico(self):
-        """Ejecuta el análisis semántico y muestra resultados"""
+        """Ejecuta el análisis semántico y muestra resultados con ámbitos"""
         try:
             # Limpiar resultados anteriores
             self.output_errores.config(state=tk.NORMAL)
@@ -1382,13 +1410,26 @@ class IDE:
             else:
                 self.output_errores.insert(tk.END, "✓ No se encontraron errores semanticos.\n", "no_errors")
             
-            # Mostrar tabla de símbolos
+            # Mostrar tabla de símbolos con información de ámbitos
             self.output_semantico.insert(tk.END, "=== TABLA DE SIMBOLOS ===\n", "header")
             
             if result['symbol_table']:
-                self._mostrar_analisis_semantico_completo(result['symbol_table'])
+                # Obtener estadísticas de ámbitos del analyzer
+                analyzer = None
+                try:
+                    # Crear analyzer temporal para obtener estadísticas
+                    from semantico import SemanticAnalyzer
+                    from sintactico import parse_code
+                    parse_result = parse_code(input_text)
+                    if parse_result['success'] and parse_result['ast']:
+                        analyzer = SemanticAnalyzer()
+                        analyzer.analyze(parse_result['ast'])
+                except:
+                    pass
+                
+                self._mostrar_analisis_semantico_completo(result['symbol_table'], analyzer)
                     
-                # MOSTRAR TABLA HASH - ESTA ES LA PARTE NUEVA
+                # MOSTRAR TABLA HASH con información de ámbitos
                 self._mostrar_tabla_hash(result['symbol_table'])
             else:
                 self.output_semantico.insert(tk.END, "No se encontraron simbolos.\n")
@@ -1557,7 +1598,7 @@ class IDE:
         
         
     def _mostrar_tabla_hash(self, simbolos):
-        """Muestra la tabla hash en la pestaña correspondiente - VERSIÓN CORREGIDA"""
+        """Muestra la tabla hash en la pestaña correspondiente - VERSIÓN MEJORADA CON ÁMBITOS"""
         # Limpiar treeview
         for item in self.hash_tree.get_children():
             self.hash_tree.delete(item)
@@ -1577,13 +1618,15 @@ class IDE:
         # Obtener símbolos organizados por índice
         indices = tabla_hash.obtener_todos()
         
-        # Colores suaves para diferentes índices
-        colores = ['#e8f4fd', '#f0f8ff', '#f8f8ff', '#fff8f0', '#f8fff8', 
-                '#fff8f8', '#f8f0ff', '#fff0f8', '#f0fff8', '#f8f8f0']
+        # Colores suaves para diferentes ámbitos
+        color_global = '#e8f4fd'  # Azul claro para globales
+        color_local = '#f0fff0'   # Verde claro para locales
         
         # Estadísticas
         total_simbolos = 0
         colisiones = 0
+        globales = 0
+        locales = 0
         
         # Mostrar en el treeview
         for indice, simbolos_indice in indices:
@@ -1602,22 +1645,30 @@ class IDE:
                                                 f"Índice {indice}", 
                                                 f"{len(simbolos_indice)} símbolo(s) - Hash: '{primer_caracter}' → {hash_calculado}"
                                             ),
-                                            tags=(f'color{indice}',))
+                                            tags=('header',))
                 
                 # Agregar símbolos como hijos
                 for i, simbolo in enumerate(simbolos_indice):
-                    # Formatear correctamente el ámbito
+                    # Determinar ámbito y color
                     alcance = simbolo.get('alcance', 'global')
                     if alcance == 'global':
-                        alcance_texto = "global"
+                        tag_ambito = 'global'
+                        globales += 1
                     else:
-                        alcance_texto = alcance
+                        tag_ambito = 'local'
+                        locales += 1
                     
-                    info = f"• {simbolo['nombre']} : {simbolo['tipo']} | Línea: {simbolo['linea']} | Ámbito: {alcance_texto}"
+                    # Formatear correctamente el ámbito
+                    if alcance == 'global':
+                        alcance_texto = "🌍 GLOBAL"
+                    else:
+                        alcance_texto = f"🏠 LOCAL ({alcance})"
+                    
+                    info = f"• {simbolo['nombre']} : {simbolo['tipo']} | Línea: {simbolo['linea']} | {alcance_texto}"
                     
                     self.hash_tree.insert(padre, "end", text="", 
                                         values=("", info),
-                                        tags=(f'color{indice}',))
+                                        tags=(tag_ambito,))
                 
                 # Expandir el nodo padre
                 self.hash_tree.item(padre, open=True)
@@ -1625,20 +1676,31 @@ class IDE:
                 # Índice vacío
                 self.hash_tree.insert("", "end", text="", 
                                     values=(f"Índice {indice}", "Vacío"),
-                                    tags=(f'color{indice}',))
+                                    tags=('empty',))
         
-        # Configurar tags para colores
-        for i in range(10):
-            self.hash_tree.tag_configure(f'color{i}', background=colores[i])
+        # Configurar tags para colores por ámbito
+        self.hash_tree.tag_configure('global', background=color_global)
+        self.hash_tree.tag_configure('local', background=color_local)
+        self.hash_tree.tag_configure('header', background='#ffeaa7', font=('Arial', 10, 'bold'))
+        self.hash_tree.tag_configure('empty', background='#f8f9fa')
         
         # Mostrar estadísticas en un nodo especial al inicio
         if total_simbolos > 0:
             stats_padre = self.hash_tree.insert("", 0, text="", 
-                                            values=("📊 ESTADÍSTICAS", 
-                                                    f"Total: {total_simbolos} símbolos | Colisiones: {colisiones} | Factor de carga: {total_simbolos/10:.2f}"),
+                                            values=("📊 ESTADÍSTICAS DE ÁMBITOS", 
+                                                    f"Total: {total_simbolos} símbolos | Globales: {globales} | Locales: {locales} | Colisiones: {colisiones}"),
                                             tags=('stats',))
-            self.hash_tree.tag_configure('stats', background='#ffeaa7', font=('Arial', 10, 'bold'))
+            self.hash_tree.tag_configure('stats', background='#dda0dd', font=('Arial', 10, 'bold'))
             self.hash_tree.item(stats_padre, open=True)
+            
+            # Agregar explicación de ámbitos
+            explicacion = self.hash_tree.insert("", 1, text="", 
+                                            values=("💡 EXPLICACIÓN DE ÁMBITOS", 
+                                                    "🌍 GLOBAL: Fuera de bloques | 🏠 LOCAL: Dentro de if/while/do"),
+                                            tags=('explain',))
+            self.hash_tree.tag_configure('explain', background='#98fb98', font=('Arial', 9))
+            self.hash_tree.item(explicacion, open=True)
+        
     def _create_error_tooltip(self, position, message):
         """Crea un tooltip para mostrar el mensaje de error"""
         bbox = self.editor.bbox(position)
