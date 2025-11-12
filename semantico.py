@@ -24,7 +24,7 @@ class SymbolTable:
                     'nombre': name,
                     'tipo': info['type'],
                     'valor': info.get('value'),
-                    'alcance': f'local_nivel_{self.current_scope}',
+                    'alcance': f'{self.current_scope}',
                     'linea': info.get('line', 'N/A')
                 })
                 print(f"DEBUG: Guardando símbolo local '{name}' del ámbito {self.current_scope}")
@@ -39,7 +39,7 @@ class SymbolTable:
         if name in self.scopes[self.current_scope]:
             return False
         
-        ambito = "GLOBAL" if self.current_scope == 0 else f"LOCAL(nivel_{self.current_scope})"
+        ambito = "GLOBAL" if self.current_scope == 0 else f"LOCAL({self.current_scope})"
         print(f"DEBUG: Agregando símbolo '{name}' tipo '{symbol_type}' en ámbito {ambito}")
 
         self.scopes[self.current_scope][name] = {
@@ -89,7 +89,7 @@ class SymbolTable:
                     'linea': info.get('line', 'N/A')
                 })
         
-        # DEBUG detallado
+        # DEBUG
         for symbol in self.all_symbols:
             print(f"DEBUG SYMBOL: {symbol['nombre']} -> {symbol['alcance']}")
             

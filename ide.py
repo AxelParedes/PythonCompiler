@@ -872,7 +872,7 @@ class IDE:
         self.editor.bind("<Configure>", self._on_change)
         self.editor.bind("<MouseWheel>", self._on_mousewheel)
         
-        # ... (resto del código igual)
+       
 
     def _on_scroll(self, *args):
         """Maneja el evento de scroll y actualiza los números de línea"""
@@ -1570,31 +1570,6 @@ class IDE:
         
         for child in self.semantic_tree.get_children():
             collapse_all(child)
-
-    #     Método para mostrar el árbol semántico en el Treeview
-    # def _display_semantic_tree(self, semantic_tree):
-    #         """Muestra el árbol semántico en el Treeview"""
-    #         self.semantic_tree.delete(*self.semantic_tree.get_children())
-    #         self._add_semantic_tree_node("", semantic_tree.root)
-            
-
-    # def _add_semantic_tree_node(self, parent, node):
-    #         """Añade un nodo del árbol semántico al Treeview"""
-    #         if node is None:
-    #             return
-
-    #         node_text = node['type']
-    #         if node['value'] is not None:
-    #             node_text += f" ({node['value']})"
-
-    #         node_id = self.semantic_tree.insert(
-    #             parent, "end", 
-    #             text=node_text,
-    #             values=(node['value'], node['type'], node['line'])
-    #         )
-
-    #         for child in node['children']:
-    #             self._add_semantic_tree_node(node_id, child)
         
         
     def _mostrar_tabla_hash(self, simbolos):
@@ -1687,7 +1662,7 @@ class IDE:
         # Mostrar estadísticas en un nodo especial al inicio
         if total_simbolos > 0:
             stats_padre = self.hash_tree.insert("", 0, text="", 
-                                            values=("📊 ESTADÍSTICAS DE ÁMBITOS", 
+                                            values=("ESTADÍSTICAS DE ÁMBITOS", 
                                                     f"Total: {total_simbolos} símbolos | Globales: {globales} | Locales: {locales} | Colisiones: {colisiones}"),
                                             tags=('stats',))
             self.hash_tree.tag_configure('stats', background='#dda0dd', font=('Arial', 10, 'bold'))
@@ -1695,8 +1670,8 @@ class IDE:
             
             # Agregar explicación de ámbitos
             explicacion = self.hash_tree.insert("", 1, text="", 
-                                            values=("💡 EXPLICACIÓN DE ÁMBITOS", 
-                                                    "🌍 GLOBAL: Fuera de bloques | 🏠 LOCAL: Dentro de if/while/do"),
+                                            values=("EXPLICACIÓN DE ÁMBITOS", 
+                                                    "GLOBAL: Fuera de bloques | LOCAL: Dentro de if/while/do"),
                                             tags=('explain',))
             self.hash_tree.tag_configure('explain', background='#98fb98', font=('Arial', 9))
             self.hash_tree.item(explicacion, open=True)
