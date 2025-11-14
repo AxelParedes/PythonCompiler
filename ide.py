@@ -480,6 +480,9 @@ class IDE:
         compilemenu = tk.Menu(menubar, tearoff=0)
         compilemenu.add_command(label="Compilar Léxico", command=self.compile_lexico)
         compilemenu.add_command(label="Compilar Sintáctico", command=self.compile_sintactico)
+        compilemenu.add_command(label="Compilar Semántico", command=self.compile_semantico)
+        compilemenu.add_command(label="Código Intermedio", command=self.compile_intermedio)
+        compilemenu.add_command(label="Compilar y Ejecutar", command=self.compile_ejecucion)
        
         menubar.add_cascade(label="Compilar", menu=compilemenu)
 
@@ -582,6 +585,16 @@ class IDE:
         btn_semantico = tk.Button(toolbar, text="Compilar Semántico", command=self.compile_semantico)
         btn_semantico.pack(side=tk.LEFT, padx=2, pady=2)
         self.add_tooltip(btn_semantico, "Compilar Semántico")
+        
+        btn_intermedio = tk.Button(toolbar, text="Código Intermedio", command=self.compile_intermedio)
+        btn_intermedio.pack(side=tk.LEFT, padx=2, pady=2)
+        self.add_tooltip(btn_intermedio, "Generar Código Intermedio")
+        
+        btn_ejecutar = tk.Button(toolbar, text="Compilar y Ejecutar", command=self.compile_ejecucion)
+        btn_ejecutar.pack(side=tk.LEFT, padx=2, pady=2)
+        self.add_tooltip(btn_ejecutar, "Compilar y Ejecutar Programa")
+        
+        
 
     def add_tooltip(self, widget, text):
         '''Agrega un tooltip (hover) a un widget'''
@@ -1406,6 +1419,193 @@ class IDE:
             self.output_errores.config(state=tk.DISABLED)
             import traceback
             traceback.print_exc()
+            
+    def compile_intermedio(self):
+        """Compila y muestra el código intermedio"""
+        try:
+            # Limpiar resultados anteriores
+            self.output_intermedio.config(state=tk.NORMAL)
+            self.output_intermedio.delete(1.0, tk.END)
+            self.output_errores.config(state=tk.NORMAL)
+            self.output_errores.delete(1.0, tk.END)
+            
+            # Obtener texto actual
+            input_text = self.editor.get(1.0, tk.END)
+            
+            if not input_text.strip():
+                self.output_errores.insert(tk.END, "El editor está vacío.\n")
+                self.output_errores.config(state=tk.DISABLED)
+                self.output_intermedio.config(state=tk.DISABLED)
+                return
+            
+            # Primero análisis sintáctico
+            from sintactico import parse_code
+            result = parse_code(input_text)
+            
+            if not result['success']:
+                self.output_errores.insert(tk.END, "No se puede generar código intermedio debido a errores sintácticos\n")
+                for error in result.get('errors', []):
+                    self.output_errores.insert(tk.END, f"- {error.get('message', str(error))}\n")
+                self.output_errores.config(state=tk.DISABLED)
+                self.output_intermedio.config(state=tk.DISABLED)
+                return
+            
+            # Análisis semántico para obtener tabla de símbolos
+            from semantico import test_semantics
+            semantic_result = test_semantics(input_text)
+            
+            if semantic_result['errors']:
+                self.output_errores.insert(tk.END, "Advertencia: Errores semánticos encontrados:\n")
+                for error in semantic_result['errors']:
+                    self.output_errores.insert(tk.END, f"- {error}\n")
+            
+            # Generar código intermedio
+            from intermedio import generate_intermediate_code
+            symbol_table_dict = {sym['nombre']: sym for sym in semantic_result['symbol_table']}
+            quadruples, intermedio_str = generate_intermediate_code(result['ast'], symbol_table_dict)
+            
+            # Mostrar código intermedio
+            self.output_intermedio.insert(tk.END, intermedio_str)
+            
+            # Aplicar optimizaciones
+            from optimizacion import optimize_intermediate_code
+            optimized_quads, optimization_report = optimize_intermediate_code(quadruples)
+            
+            # Mostrar código optimizado
+            from intermedio import IntermediateCodeGenerator
+            generator = IntermediateCodeGenerator()
+            optimized_str = generator.get_quadruples_string()
+            
+            self.output_intermedio.insert(tk.END, "\n\n=== CÓDIGO OPTIMIZADO ===\n")
+            self.output_intermedio.insert(tk.END, optimization_report)
+            self.output_intermedio.insert(tk.END, "\n")
+            
+            for i, quad in enumerate(optimized_quads):
+                self.output_intermedio.insert(tk.END, f"{i:3d}. ")
+                if quad['type'] == 'assign':
+                    self.output_intermedio.insert(tk.END, f"{quad['target']} = {quad['source']}")
+                elif quad['type'] == 'binary_op':
+                    self.output_intermedio.insert(tk.END, f"{quad['target']} = {quad['left']} {quad['operator']} {quad['right']}")
+                elif quad['type'] == 'unary_op':
+                    self.output_intermedio.insert(tk.END, f"{quad['target']} = {quad['operator']}{quad['operand']}")
+                elif quad['type'] == 'if_false_goto':
+                    self.output_intermedio.insert(tk.END, f"IF_FALSE {quad['condition']} GOTO {quad['label']}")
+                elif quad['type'] == 'if_true_goto':
+                    self.output_intermedio.insert(tk.END, f"IF_TRUE {quad['condition']} GOTO {quad['label']}")
+                elif quad['type'] == 'goto':
+                    self.output_intermedio.insert(tk.END, f"GOTO {quad['label']}")
+                elif quad['type'] == 'label':
+                    self.output_intermedio.insert(tk.END, f"{quad['name']}:")
+                elif quad['type'] == 'input':
+                    self.output_intermedio.insert(tk.END, f"INPUT {quad['target']}")
+                elif quad['type'] == 'output':
+                    self.output_intermedio.insert(tk.END, f"OUTPUT {quad['value']}")
+                self.output_intermedio.insert(tk.END, "\n")
+            
+            # Generar código LLVM
+            from llvm_generator import generate_llvm_code
+            llvm_code = generate_llvm_code(optimized_quads, symbol_table_dict)
+            
+            self.output_intermedio.insert(tk.END, "\n\n=== CÓDIGO LLVM ===\n")
+            self.output_intermedio.insert(tk.END, llvm_code)
+            
+            # Guardar código LLVM en archivo temporal
+            import tempfile
+            self.llvm_file = tempfile.NamedTemporaryFile(mode='w', suffix='.ll', delete=False)
+            self.llvm_file.write(llvm_code)
+            self.llvm_file.close()
+            
+            self.output_intermedio.insert(tk.END, f"\n\nCódigo LLVM guardado en: {self.llvm_file.name}")
+            
+            self.output_errores.config(state=tk.DISABLED)
+            self.output_intermedio.config(state=tk.DISABLED)
+            
+        except Exception as e:
+            self.output_errores.config(state=tk.NORMAL)
+            self.output_errores.insert(tk.END, f"Error durante generación de código intermedio: {str(e)}\n")
+            self.output_errores.config(state=tk.DISABLED)
+            import traceback
+            traceback.print_exc()
+            
+    def compile_ejecucion(self):
+        """Compila y ejecuta el código"""
+        try:
+            self.output_ejecucion.config(state=tk.NORMAL)
+            self.output_ejecucion.delete(1.0, tk.END)
+            self.output_errores.config(state=tk.NORMAL)
+            self.output_errores.delete(1.0, tk.END)
+            
+            # Primero generar código intermedio (que también genera LLVM)
+            self.compile_intermedio()
+            
+            # Verificar que tenemos archivo LLVM
+            if not hasattr(self, 'llvm_file'):
+                self.output_ejecucion.insert(tk.END, "Error: No se generó código LLVM\n")
+                self.output_ejecucion.config(state=tk.DISABLED)
+                return
+            
+            # Compilar LLVM a ejecutable
+            import subprocess
+            import os
+            
+            llvm_filename = self.llvm_file.name
+            executable_filename = llvm_filename.replace('.ll', '.out')
+            
+            self.output_ejecucion.insert(tk.END, "Compilando con LLVM...\n")
+            
+            # Compilar con clang
+            try:
+                result = subprocess.run([
+                    'clang', '-o', executable_filename, llvm_filename
+                ], capture_output=True, text=True, timeout=30)
+                
+                if result.returncode == 0:
+                    self.output_ejecucion.insert(tk.END, "✓ Compilación exitosa\n")
+                    self.output_ejecucion.insert(tk.END, f"Ejecutable: {executable_filename}\n\n")
+                    
+                    # Ejecutar el programa
+                    self.output_ejecucion.insert(tk.END, "Ejecutando programa...\n")
+                    self.output_ejecucion.insert(tk.END, "=" * 50 + "\n")
+                    
+                    # Para entrada/salida interactiva
+                    process = subprocess.Popen(
+                        [executable_filename],
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True
+                    )
+                    
+                    # Si el programa espera entrada, podrías necesitar implementar
+                    # un mecanismo más complejo aquí
+                    stdout, stderr = process.communicate(timeout=10)
+                    
+                    self.output_ejecucion.insert(tk.END, stdout)
+                    if stderr:
+                        self.output_ejecucion.insert(tk.END, f"Errores:\n{stderr}")
+                    
+                    self.output_ejecucion.insert(tk.END, "\n" + "=" * 50 + "\n")
+                    self.output_ejecucion.insert(tk.END, f"Programa finalizado con código: {process.returncode}\n")
+                    
+                else:
+                    self.output_ejecucion.insert(tk.END, "✗ Error en compilación:\n")
+                    self.output_ejecucion.insert(tk.END, result.stderr + "\n")
+                    
+            except subprocess.TimeoutExpired:
+                self.output_ejecucion.insert(tk.END, "✗ Tiempo de compilación excedido\n")
+            except FileNotFoundError:
+                self.output_ejecucion.insert(tk.END, "✗ Error: clang no encontrado. Asegúrate de tener LLVM instalado\n")
+            except Exception as e:
+                self.output_ejecucion.insert(tk.END, f"✗ Error durante ejecución: {str(e)}\n")
+            
+            self.output_ejecucion.config(state=tk.DISABLED)
+            self.output_errores.config(state=tk.DISABLED)
+            
+        except Exception as e:
+            self.output_errores.config(state=tk.NORMAL)
+            self.output_errores.insert(tk.END, f"Error durante ejecución: {str(e)}\n")
+            self.output_errores.config(state=tk.DISABLED)
+            self.output_ejecucion.config(state=tk.DISABLED)
 
     def _expand_semantic_tree(self):
         """Expande todos los nodos del árbol semántico"""
@@ -1754,10 +1954,7 @@ class IDE:
         if line is not None:
             adjusted_line = max(1, line - (total_lines - 1))
             line_text = f" [Línea: {adjusted_line}]"
-        
-        # Caso especial: Incrementos/decrementos
-        
-        
+                
         # Caso especial: Asignaciones
         if node.type == 'asignacion':
             assign_text = f"={line_text}"
@@ -1855,26 +2052,7 @@ class IDE:
                 line_text = f" [Línea: {max(1, parent_line - (total_lines - 1))}]" if parent_line is not None else ""
                 treeview.insert(parent_id, "end", text=f"{child}{line_text}")
     
-    
-                
-        # def _build_expr_tree(self, treeview, parent, node, total_lines):
-        # """Construye subárbol para expresiones"""
-        # if not isinstance(node, ASTNode):
-        #     return
-        
-        # line = getattr(node, 'lineno', None)
-        # line_text = f" [Línea: {max(1, line - (total_lines - 1))}]" if line else ""
-        
-        # if node.type == 'expresion_binaria':
-        #     op_text = f"{node.value}{line_text}"
-        #     op_id = treeview.insert(parent, "end", text=op_text)
-            
-        #     for child in node.children:
-        #         self._build_expr_tree(treeview, op_id, child, total_lines)
-        # else:
-        #     node_text = f"{node.value if hasattr(node, 'value') else node.type}{line_text}"
-        #     treeview.insert(parent, "end", text=node_text)
-        
+
 
     def _expand_tree(self, tree, item):
         """Expande todos los nodos del árbol"""
@@ -1890,9 +2068,6 @@ class IDE:
             self._collapse_tree(tree, child)
         tree.item(item, open=False)
 
-   
-
-   
 
     def _highlight_error_in_editor(self, errors, input_text=None):
         """Resalta errores en el editor con ubicación precisa"""
