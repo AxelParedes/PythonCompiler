@@ -13,9 +13,9 @@ tokens = [
     'AND', 'OR', 'NOT', 'DO', 'OP_IN', 'FOR', 'DEFAULT', 'COLON',
     'OP_OUT','LPAREN', 'RPAREN', 'LBRACE', 'RBRACE',
     'COMMA', 'SEMICOLON', 'THEN', 'UNTIL', 'END', 'IF',
-    'ELSE', 'DO', 'WHILE', 'SWITCH', 'CASE',
+    'ELSE', 'DO', 'WHILE', 'SWITCH', 'CASE', 'COUT', 'CIN',
     'INCREMENT', 'DECREMENT', 'LSHIFT', 'RSHIFT', 'STRING', 'STRING_LITERAL', 
-    'BOOL', 'TRUE', 'FALSE', 'ASSIGN', 'INT', 'FLOAT', 'BOOL','FUNCTION', 'RETURN', 'VOID', 'PARAMS'
+    'BOOL', 'TRUE', 'FALSE', 'ASSIGN', 'INT', 'FLOAT', 'BOOL','FUNCTION', 'RETURN', 'VOID', 'PARAMS', 'MAIN'   
 ] + list(reserved.values())
 
 # Operadores y símbolos
@@ -61,8 +61,14 @@ t_CASE = r'case'
 t_DEFAULT = r'default'
 t_FOR = r'for'
 t_COLON = r':'
+t_COUT = r'cout'
+t_CIN = r'cin'
 
-
+def reset_lexer():
+    """Reinicia el estado interno del lexer"""
+    global lexer
+    lexer = lex.lex()
+    print("DEBUG: Lexer reiniciado")
 
 # Tokens numéricos
 def t_REAL(t):
