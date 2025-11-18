@@ -443,6 +443,8 @@ class IDE:
         self.root = root
         self.root.title("IDE para Compilador")
         self.filepath = None
+        self._user_inputs = {}
+        self._setup_execution_tags()
         
         # Inicializar todos los atributos necesarios
         self.token_tree = None
@@ -1421,191 +1423,1727 @@ class IDE:
             traceback.print_exc()
             
     def compile_intermedio(self):
-        """Compila y muestra el código intermedio"""
+        """Compila y muestra el código intermedio CON ENSAMBLADOR"""
         try:
             # Limpiar resultados anteriores
             self.output_intermedio.config(state=tk.NORMAL)
             self.output_intermedio.delete(1.0, tk.END)
-            self.output_errores.config(state=tk.NORMAL)
-            self.output_errores.delete(1.0, tk.END)
             
             # Obtener texto actual
             input_text = self.editor.get(1.0, tk.END)
             
             if not input_text.strip():
-                self.output_errores.insert(tk.END, "El editor está vacío.\n")
-                self.output_errores.config(state=tk.DISABLED)
+                self.output_intermedio.insert(tk.END, "El editor está vacío.\n")
                 self.output_intermedio.config(state=tk.DISABLED)
                 return
             
-            # Primero análisis sintáctico
+            self.output_intermedio.insert(tk.END, "=== PROCESANDO CÓDIGO ===\n")
+            
+            # Análisis sintáctico
             from sintactico import parse_code
             result = parse_code(input_text)
             
             if not result['success']:
-                self.output_errores.insert(tk.END, "No se puede generar código intermedio debido a errores sintácticos\n")
+                self.output_intermedio.insert(tk.END, "ERRORES SINTÁCTICOS:\n")
                 for error in result.get('errors', []):
-                    self.output_errores.insert(tk.END, f"- {error.get('message', str(error))}\n")
-                self.output_errores.config(state=tk.DISABLED)
+                    self.output_intermedio.insert(tk.END, f"- {error.get('message', str(error))}\n")
                 self.output_intermedio.config(state=tk.DISABLED)
                 return
             
-            # Análisis semántico para obtener tabla de símbolos
+            self.output_intermedio.insert(tk.END, "Análisis sintáctico exitoso\n")
+            
+            # Análisis semántico
             from semantico import test_semantics
             semantic_result = test_semantics(input_text)
             
-            if semantic_result['errors']:
-                self.output_errores.insert(tk.END, "Advertencia: Errores semánticos encontrados:\n")
-                for error in semantic_result['errors']:
-                    self.output_errores.insert(tk.END, f"- {error}\n")
-            
             # Generar código intermedio
             from intermedio import generate_intermediate_code
-            symbol_table_dict = {sym['nombre']: sym for sym in semantic_result['symbol_table']}
+            
+            symbol_table_dict = {}
+            for sym in semantic_result['symbol_table']:
+                symbol_table_dict[sym['nombre']] = sym
+            
             quadruples, intermedio_str = generate_intermediate_code(result['ast'], symbol_table_dict)
             
-            # Mostrar código intermedio
-            self.output_intermedio.insert(tk.END, intermedio_str)
+            # Mostrar código intermedio ORIGINAL
+            self.output_intermedio.insert(tk.END, "\n" + intermedio_str)
             
             # Aplicar optimizaciones
             from optimizacion import optimize_intermediate_code
             optimized_quads, optimization_report = optimize_intermediate_code(quadruples)
             
-            # Mostrar código optimizado
-            from intermedio import IntermediateCodeGenerator
-            generator = IntermediateCodeGenerator()
-            optimized_str = generator.get_quadruples_string()
+            # Mostrar REPORTE DE OPTIMIZACIONES
+            self.output_intermedio.insert(tk.END, "\n" + optimization_report)
             
-            self.output_intermedio.insert(tk.END, "\n\n=== CÓDIGO OPTIMIZADO ===\n")
-            self.output_intermedio.insert(tk.END, optimization_report)
-            self.output_intermedio.insert(tk.END, "\n")
-            
+            # Mostrar código OPTIMIZADO
+            self.output_intermedio.insert(tk.END, "\n=== CÓDIGO INTERMEDIO OPTIMIZADO ===\n")
             for i, quad in enumerate(optimized_quads):
                 self.output_intermedio.insert(tk.END, f"{i:3d}. ")
                 if quad['type'] == 'assign':
                     self.output_intermedio.insert(tk.END, f"{quad['target']} = {quad['source']}")
                 elif quad['type'] == 'binary_op':
                     self.output_intermedio.insert(tk.END, f"{quad['target']} = {quad['left']} {quad['operator']} {quad['right']}")
-                elif quad['type'] == 'unary_op':
-                    self.output_intermedio.insert(tk.END, f"{quad['target']} = {quad['operator']}{quad['operand']}")
-                elif quad['type'] == 'if_false_goto':
-                    self.output_intermedio.insert(tk.END, f"IF_FALSE {quad['condition']} GOTO {quad['label']}")
-                elif quad['type'] == 'if_true_goto':
-                    self.output_intermedio.insert(tk.END, f"IF_TRUE {quad['condition']} GOTO {quad['label']}")
-                elif quad['type'] == 'goto':
-                    self.output_intermedio.insert(tk.END, f"GOTO {quad['label']}")
-                elif quad['type'] == 'label':
-                    self.output_intermedio.insert(tk.END, f"{quad['name']}:")
-                elif quad['type'] == 'input':
-                    self.output_intermedio.insert(tk.END, f"INPUT {quad['target']}")
                 elif quad['type'] == 'output':
                     self.output_intermedio.insert(tk.END, f"OUTPUT {quad['value']}")
+                elif quad['type'] == 'input':
+                    self.output_intermedio.insert(tk.END, f"INPUT {quad['target']}")
                 self.output_intermedio.insert(tk.END, "\n")
             
-            # Generar código LLVM
-            from llvm_generator import generate_llvm_code
-            llvm_code = generate_llvm_code(optimized_quads, symbol_table_dict)
+            # GENERAR Y MOSTRAR CÓDIGO ENSAMBLADOR
+            self._generate_and_show_assembly(optimized_quads, symbol_table_dict, input_text)
             
-            self.output_intermedio.insert(tk.END, "\n\n=== CÓDIGO LLVM ===\n")
-            self.output_intermedio.insert(tk.END, llvm_code)
-            
-            # Guardar código LLVM en archivo temporal
-            import tempfile
-            self.llvm_file = tempfile.NamedTemporaryFile(mode='w', suffix='.ll', delete=False)
-            self.llvm_file.write(llvm_code)
-            self.llvm_file.close()
-            
-            self.output_intermedio.insert(tk.END, f"\n\nCódigo LLVM guardado en: {self.llvm_file.name}")
-            
-            self.output_errores.config(state=tk.DISABLED)
             self.output_intermedio.config(state=tk.DISABLED)
             
         except Exception as e:
-            self.output_errores.config(state=tk.NORMAL)
-            self.output_errores.insert(tk.END, f"Error durante generación de código intermedio: {str(e)}\n")
-            self.output_errores.config(state=tk.DISABLED)
+            self.output_intermedio.insert(tk.END, f"Error: {str(e)}\n")
             import traceback
-            traceback.print_exc()
+            self.output_intermedio.insert(tk.END, traceback.format_exc())
+            self.output_intermedio.config(state=tk.DISABLED)
+
+    def _generate_and_show_assembly(self, quadruples, symbol_table, input_text):
+        """Genera y muestra código ensamblador usando LLVM"""
+        import os
+        import subprocess
+        import tempfile
+        
+        try:
+            self.output_intermedio.insert(tk.END, "\n=== GENERANDO CÓDIGO ENSAMBLADOR ===\n")
             
+            # Generar código LLVM
+            llvm_code = self._generate_complete_llvm(quadruples, symbol_table, input_text)
+            
+            # Crear archivos temporales
+            base_name = "programa"
+            llvm_file = f"{base_name}.ll"
+            asm_file = f"{base_name}.s"
+            
+            # Escribir LLVM
+            with open(llvm_file, 'w') as f:
+                f.write(llvm_code)
+            
+            self.output_intermedio.insert(tk.END, f"✓ Código LLVM generado: {llvm_file}\n")
+            
+            # Compilar a ensamblador
+            try:
+                # Usar llc para generar assembly
+                result = subprocess.run(['llc', '-O2', llvm_file, '-o', asm_file], 
+                                    capture_output=True, text=True, timeout=30)
+                
+                if result.returncode == 0:
+                    self.output_intermedio.insert(tk.END, f"✓ Código ensamblador generado: {asm_file}\n")
+                    
+                    # Leer y mostrar el ensamblador
+                    with open(asm_file, 'r') as f:
+                        assembly_code = f.read()
+                    
+                    self.output_intermedio.insert(tk.END, "\n=== CÓDIGO ENSAMBLADOR ===\n")
+                    self.output_intermedio.insert(tk.END, assembly_code)
+                    
+                    # Mostrar también el código LLVM para referencia
+                    self.output_intermedio.insert(tk.END, "\n=== CÓDIGO LLVM (REFERENCIA) ===\n")
+                    self.output_intermedio.insert(tk.END, llvm_code)
+                    
+                else:
+                    self.output_intermedio.insert(tk.END, f"✗ Error generando ensamblador: {result.stderr}\n")
+                    # Mostrar LLVM de todas formas
+                    self.output_intermedio.insert(tk.END, "\n=== CÓDIGO LLVM GENERADO ===\n")
+                    self.output_intermedio.insert(tk.END, llvm_code)
+                    
+            except FileNotFoundError:
+                self.output_intermedio.insert(tk.END, "✗ Herramienta 'llc' no encontrada. Instala LLVM.\n")
+                self.output_intermedio.insert(tk.END, "\n=== CÓDIGO LLVM (NO SE PUDO GENERAR ENSAMBLADOR) ===\n")
+                self.output_intermedio.insert(tk.END, llvm_code)
+            except subprocess.TimeoutExpired:
+                self.output_intermedio.insert(tk.END, "✗ Tiempo de espera agotado generando ensamblador\n")
+                self.output_intermedio.insert(tk.END, "\n=== CÓDIGO LLVM ===\n")
+                self.output_intermedio.insert(tk.END, llvm_code)
+                
+        except Exception as e:
+            self.output_intermedio.insert(tk.END, f"Error generando ensamblador: {str(e)}\n")
+
+    def _generate_complete_llvm(self, quadruples, symbol_table, input_text):
+        """Genera código LLVM completo CORREGIDO"""
+        
+        llvm_lines = []
+        
+        # Cabecera LLVM
+        llvm_lines.append('; Código LLVM generado por el compilador')
+        llvm_lines.append('target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"')
+        llvm_lines.append('target triple = "x86_64-pc-linux-gnu"')
+        llvm_lines.append('')
+        
+        # Declaraciones de funciones externas
+        llvm_lines.append('declare i32 @printf(i8*, ...)')
+        llvm_lines.append('declare i32 @scanf(i8*, ...)')
+        llvm_lines.append('declare i32 @__isoc99_scanf(i8*, ...)')
+        llvm_lines.append('')
+        
+        # Strings constantes para I/O
+        llvm_lines.append('@.str_int = private unnamed_addr constant [3 x i8] c"%d\\00"')
+        llvm_lines.append('@.str_float = private unnamed_addr constant [3 x i8] c"%f\\00"')
+        llvm_lines.append('@.str_string = private unnamed_addr constant [3 x i8] c"%s\\00"')
+        llvm_lines.append('@.str_newline = private unnamed_addr constant [2 x i8] c"\\0A\\00"')
+        
+        # Recopilar strings para output
+        output_strings = []
+        for quad in quadruples:
+            if quad['type'] == 'output' and isinstance(quad.get('value'), str) and quad['value'].startswith('"'):
+                string_content = quad['value'].strip('"')
+                if string_content not in output_strings:
+                    output_strings.append(string_content)
+        
+        # Agregar strings constantes para output
+        for i, string_content in enumerate(output_strings):
+            llvm_lines.append(f'@.str_out_{i} = private unnamed_addr constant [{len(string_content) + 2} x i8] c"{string_content}\\0A\\00"')
+        
+        if output_strings:
+            llvm_lines.append('')
+        
+        # Variables globales
+        global_vars = []
+        for quad in quadruples:
+            if 'target' in quad and isinstance(quad['target'], str) and not quad['target'].startswith('t'):
+                if quad['target'] not in global_vars:
+                    global_vars.append(quad['target'])
+        
+        for var in global_vars:
+            llvm_lines.append(f'@{var} = global i32 0')
+        
+        if global_vars:
+            llvm_lines.append('')
+        
+        # Función main
+        llvm_lines.append('define i32 @main() {')
+        
+        # Inicializar variables globales
+        for var in global_vars:
+            llvm_lines.append(f'  store i32 0, i32* @{var}')
+        
+        if global_vars:
+            llvm_lines.append('')
+        
+        # Procesar cuádruplos
+        temp_counter = 0
+        
+        for quad in quadruples:
+            if quad['type'] == 'assign':
+                target = quad['target']
+                source = quad['source']
+                
+                if not target or target in ['+', '-', '*', '/']:
+                    continue
+                    
+                # Convertir source
+                if isinstance(source, int):
+                    source_val = str(source)
+                    llvm_lines.append(f'  store i32 {source_val}, i32* @{target}')
+                elif isinstance(source, str):
+                    if source.startswith('t'):
+                        # Si es un temporal, ya debería estar calculado
+                        llvm_lines.append(f'  store i32 %{source}, i32* @{target}')
+                    elif source in global_vars:
+                        temp_load = f'%temp_load_{temp_counter}'
+                        temp_counter += 1
+                        llvm_lines.append(f'  {temp_load} = load i32, i32* @{source}')
+                        llvm_lines.append(f'  store i32 {temp_load}, i32* @{target}')
+                    else:
+                        try:
+                            source_val = str(int(source))
+                            llvm_lines.append(f'  store i32 {source_val}, i32* @{target}')
+                        except:
+                            llvm_lines.append(f'  store i32 0, i32* @{target}')
+                else:
+                    llvm_lines.append(f'  store i32 0, i32* @{target}')
+                    
+            elif quad['type'] == 'binary_op':
+                target = quad['target']
+                left = quad['left']
+                right = quad['right']
+                operator = quad['operator']
+                
+                # Función para obtener valores de operandos CORREGIDA
+                def get_operand_value(op):
+                    if isinstance(op, int):
+                        return str(op), None
+                    elif isinstance(op, str):
+                        if op.startswith('t'):
+                            return f'%{op}', None
+                        elif op in global_vars:
+                            nonlocal temp_counter
+                            temp_load = f'%temp_op_{temp_counter}'
+                            temp_counter += 1
+                            return temp_load, f'  {temp_load} = load i32, i32* @{op}'
+                        else:
+                            try:
+                                return str(int(op)), None
+                            except:
+                                return '0', None
+                    return '0', None
+                
+                left_val, left_code = get_operand_value(left)
+                right_val, right_code = get_operand_value(right)
+                
+                # Emitir código de carga si es necesario
+                if left_code:
+                    llvm_lines.append(left_code)
+                if right_code:
+                    llvm_lines.append(right_code)
+                
+                # Generar operación
+                if operator == '+':
+                    llvm_lines.append(f'  %{target} = add i32 {left_val}, {right_val}')
+                elif operator == '-':
+                    llvm_lines.append(f'  %{target} = sub i32 {left_val}, {right_val}')
+                elif operator == '*':
+                    llvm_lines.append(f'  %{target} = mul i32 {left_val}, {right_val}')
+                elif operator == '/':
+                    llvm_lines.append(f'  %{target} = sdiv i32 {left_val}, {right_val}')
+                    
+            elif quad['type'] == 'output':
+                value = quad['value']
+                
+                if isinstance(value, str) and value.startswith('"'):
+                    # Output de string
+                    for j, string_content in enumerate(output_strings):
+                        if string_content == value.strip('"'):
+                            llvm_lines.append(f'  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([{len(string_content) + 2} x i8], [{len(string_content) + 2} x i8]* @.str_out_{j}, i32 0, i32 0))')
+                            break
+                else:
+                    # Output de variable
+                    if value in global_vars:
+                        temp_load = f'%temp_out_{temp_counter}'
+                        temp_counter += 1
+                        llvm_lines.append(f'  {temp_load} = load i32, i32* @{value}')
+                        llvm_lines.append(f'  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str_int, i32 0, i32 0), i32 {temp_load})')
+                    else:
+                        llvm_lines.append(f'  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str_int, i32 0, i32 0), i32 {value})')
+                
+                # Nueva línea después de cada output
+                llvm_lines.append('  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_newline, i32 0, i32 0))')
+                
+            elif quad['type'] == 'input':
+                target = quad['target']
+                llvm_lines.append(f'  call i32 (i8*, ...) @__isoc99_scanf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str_int, i32 0, i32 0), i32* @{target})')
+        
+        # Retorno
+        llvm_lines.append('  ret i32 0')
+        llvm_lines.append('}')
+        
+        return '\n'.join(llvm_lines)
+
+    def _get_llvm_operand(self, operand, global_vars, temp_counter):
+        """Convierte un operando a representación LLVM CORREGIDO"""
+        if isinstance(operand, int):
+            return str(operand)
+        elif isinstance(operand, str):
+            if operand in global_vars:
+                temp_name = f'%temp_load_{temp_counter}'
+                # CORRECCIÓN: Separar la declaración del uso
+                return temp_name, f'{temp_name} = load i32, i32* @{operand}'
+            else:
+                try:
+                    return str(int(operand)), None
+                except:
+                    return '0', None
+        return '0', None
+
+    def _generate_llvm_files(self, quadruples, symbol_table):
+        """Genera archivos LLVM, assembly y ejecutable"""
+        import os
+        import subprocess
+        import tempfile
+        
+        try:
+            # Generar código LLVM
+            llvm_code = self._generate_simple_llvm(quadruples, symbol_table)
+            
+            # Crear archivos temporales
+            base_name = "programa"
+            llvm_file = f"{base_name}.ll"
+            opt_llvm_file = f"{base_name}_opt.ll"
+            asm_file = f"{base_name}.s"
+            exe_file = f"{base_name}.exe" if os.name == 'nt' else base_name
+            
+            # Escribir LLVM original
+            with open(llvm_file, 'w') as f:
+                f.write(llvm_code)
+            
+            # Optimizar LLVM
+            if os.path.exists(llvm_file):
+                try:
+                    subprocess.run(['opt', '-O3', '-S', llvm_file, '-o', opt_llvm_file], 
+                                capture_output=True, check=True)
+                    self.output_intermedio.insert(tk.END, f"\nLLVM optimizado: {opt_llvm_file}\n")
+                except:
+                    # Si opt no está disponible, copiar el archivo original
+                    import shutil
+                    shutil.copy(llvm_file, opt_llvm_file)
+                    self.output_intermedio.insert(tk.END, f"\nLLVM (opt no disponible): {opt_llvm_file}\n")
+            
+            # Compilar a assembly
+            try:
+                subprocess.run(['llc', '-O3', opt_llvm_file, '-o', asm_file], 
+                            capture_output=True, check=True)
+                self.output_intermedio.insert(tk.END, f"Assembly: {asm_file}\n")
+            except:
+                self.output_intermedio.insert(tk.END, f"No se pudo generar assembly (llc no disponible)\n")
+            
+            # Compilar a ejecutable
+            try:
+                if os.name == 'nt':  # Windows
+                    subprocess.run(['clang', opt_llvm_file, '-o', exe_file], 
+                                capture_output=True, check=True)
+                else:  # Linux/Mac
+                    subprocess.run(['clang', opt_llvm_file, '-o', exe_file], 
+                                capture_output=True, check=True)
+                self.output_intermedio.insert(tk.END, f"Ejecutable: {exe_file}\n")
+            except:
+                self.output_intermedio.insert(tk.END, f"No se pudo generar ejecutable (clang no disponible)\n")
+            
+            # Mostrar código LLVM
+            self.output_intermedio.insert(tk.END, f"\n=== CÓDIGO LLVM ({llvm_file}) ===\n")
+            self.output_intermedio.insert(tk.END, llvm_code)
+            
+        except Exception as e:
+            self.output_intermedio.insert(tk.END, f"Error generando archivos: {str(e)}\n")
+
     def compile_ejecucion(self):
-        """Compila y ejecuta el código"""
+        """Compila y EJECUTA el código - BLOQUEA hasta recibir inputs requeridos"""
         try:
             self.output_ejecucion.config(state=tk.NORMAL)
             self.output_ejecucion.delete(1.0, tk.END)
-            self.output_errores.config(state=tk.NORMAL)
-            self.output_errores.delete(1.0, tk.END)
             
-            # Primero generar código intermedio (que también genera LLVM)
-            self.compile_intermedio()
+            input_text = self.editor.get(1.0, tk.END)
             
-            # Verificar que tenemos archivo LLVM
-            if not hasattr(self, 'llvm_file'):
-                self.output_ejecucion.insert(tk.END, "Error: No se generó código LLVM\n")
+            if not input_text.strip():
+                self.output_ejecucion.insert(tk.END, "ERROR: El editor está vacío.\n")
                 self.output_ejecucion.config(state=tk.DISABLED)
                 return
             
-            # Compilar LLVM a ejecutable
-            import subprocess
-            import os
+            # Mostrar encabezado limpio
+            self.output_ejecucion.insert(tk.END, "COMPILANDO Y EJECUTANDO\n")
+            self.output_ejecucion.insert(tk.END, "=" * 50 + "\n")
             
-            llvm_filename = self.llvm_file.name
-            executable_filename = llvm_filename.replace('.ll', '.out')
+            # PASO 1: Análisis sintáctico
+            from sintactico import parse_code
+            result = parse_code(input_text)
             
-            self.output_ejecucion.insert(tk.END, "Compilando con LLVM...\n")
+            if not result['success']:
+                self.output_ejecucion.insert(tk.END, "ERRORES SINTÁCTICOS:\n")
+                for error in result.get('errors', []):
+                    self.output_ejecucion.insert(tk.END, f"   - {error.get('message', str(error))}\n")
+                self.output_ejecucion.config(state=tk.DISABLED)
+                return
             
-            # Compilar con clang
-            try:
-                result = subprocess.run([
-                    'clang', '-o', executable_filename, llvm_filename
-                ], capture_output=True, text=True, timeout=30)
+            # PASO 2: Análisis semántico  
+            from semantico import test_semantics
+            semantic_result = test_semantics(input_text)
+            
+            if semantic_result['errors']:
+                self.output_ejecucion.insert(tk.END, "ERRORES SEMÁNTICOS:\n")
+                for error in semantic_result['errors']:
+                    self.output_ejecucion.insert(tk.END, f"   - {error}\n")
+                self.output_ejecucion.config(state=tk.DISABLED)
+                return
+            
+            # PASO 3: Generar código intermedio
+            from intermedio import generate_intermediate_code
+            
+            symbol_table_dict = {}
+            for sym in semantic_result['symbol_table']:
+                symbol_table_dict[sym['nombre']] = sym
+            
+            quadruples, intermedio_str = generate_intermediate_code(result['ast'], symbol_table_dict)
+            
+            # ELIMINAR TODOS LOS DUPLICADOS DE LOS CUÁDRUPLOS
+            cleaned_quadruples = self._remove_duplicate_quadruples(quadruples)
+            
+            # DETECTAR si hay instrucciones de input (cin)
+            input_instructions = [q for q in cleaned_quadruples if q['type'] == 'input']
+            
+            # PASO 4: SI HAY INPUTS, BLOQUEAR hasta que se ingresen TODOS
+            user_inputs = {}
+            previous_outputs = []
+            
+            if input_instructions:
+                # EJECUTAR PARCIALMENTE HASTA EL PRIMER INPUT PARA CAPTURAR OUTPUTS
+                temp_memory = {}
                 
-                if result.returncode == 0:
-                    self.output_ejecucion.insert(tk.END, "✓ Compilación exitosa\n")
-                    self.output_ejecucion.insert(tk.END, f"Ejecutable: {executable_filename}\n\n")
+                for quad in cleaned_quadruples:
+                    # Si encontramos un input, detenemos la ejecución parcial
+                    if quad['type'] == 'input':
+                        break
                     
-                    # Ejecutar el programa
-                    self.output_ejecucion.insert(tk.END, "Ejecutando programa...\n")
-                    self.output_ejecucion.insert(tk.END, "=" * 50 + "\n")
+                    # Ejecutar la instrucción actual
+                    if quad['type'] == 'assign':
+                        target = quad['target']
+                        source = quad['source']
+                        temp_memory[target] = source
+                            
+                    elif quad['type'] == 'binary_op':
+                        result = self._execute_binary_operation(quad, temp_memory)
+                        if result is not None:
+                            temp_memory[quad['target']] = result
+                            
+                    elif quad['type'] == 'output':
+                        value = quad['value']
+                        if value.startswith('"'):  # String literal
+                            output_text = value.strip('"')
+                            previous_outputs.append(output_text)
+                        else:  # Variable
+                            output_value = temp_memory.get(value, value)
+                            previous_outputs.append(str(output_value))
+                
+                # DEBUG: Mostrar qué outputs se capturaron
+                print(f"DEBUG: Outputs capturados para ventana: {previous_outputs}")
+                
+                # Crear ventana de inputs con tabla de símbolos y outputs anteriores
+                input_window = self._create_blocking_input_window(input_instructions, symbol_table_dict, previous_outputs)
+                
+                # ESPERAR a que el usuario ingrese los datos o cancele
+                self.root.wait_window(input_window)
+                
+                # Verificar si se ingresaron los datos
+                if not hasattr(self, '_user_inputs') or not self._user_inputs:
+                    self.output_ejecucion.insert(tk.END, "EJECUCIÓN CANCELADA: No se ingresaron los datos requeridos\n")
+                    self.output_ejecucion.config(state=tk.DISABLED)
+                    return
                     
-                    # Para entrada/salida interactiva
-                    process = subprocess.Popen(
-                        [executable_filename],
-                        stdin=subprocess.PIPE,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        text=True
-                    )
-                    
-                    # Si el programa espera entrada, podrías necesitar implementar
-                    # un mecanismo más complejo aquí
-                    stdout, stderr = process.communicate(timeout=10)
-                    
-                    self.output_ejecucion.insert(tk.END, stdout)
-                    if stderr:
-                        self.output_ejecucion.insert(tk.END, f"Errores:\n{stderr}")
-                    
-                    self.output_ejecucion.insert(tk.END, "\n" + "=" * 50 + "\n")
-                    self.output_ejecucion.insert(tk.END, f"Programa finalizado con código: {process.returncode}\n")
-                    
-                else:
-                    self.output_ejecucion.insert(tk.END, "✗ Error en compilación:\n")
-                    self.output_ejecucion.insert(tk.END, result.stderr + "\n")
-                    
-            except subprocess.TimeoutExpired:
-                self.output_ejecucion.insert(tk.END, "✗ Tiempo de compilación excedido\n")
-            except FileNotFoundError:
-                self.output_ejecucion.insert(tk.END, "✗ Error: clang no encontrado. Asegúrate de tener LLVM instalado\n")
-            except Exception as e:
-                self.output_ejecucion.insert(tk.END, f"✗ Error durante ejecución: {str(e)}\n")
+                user_inputs = self._user_inputs
+                
+                # Verificar inputs requeridos
+                required_inputs = set([inst['target'] for inst in input_instructions])
+                provided_inputs = set(user_inputs.keys())
+                
+                if required_inputs != provided_inputs:
+                    missing = required_inputs - provided_inputs
+                    self.output_ejecucion.insert(tk.END, f"FALTAN DATOS: No se ingresaron valores para: {', '.join(missing)}\n")
+                    self.output_ejecucion.config(state=tk.DISABLED)
+                    return
+                
+                self.output_ejecucion.insert(tk.END, "Todos los datos ingresados correctamente\n")
+            
+            self.output_ejecucion.insert(tk.END, "Ejecutando programa...\n")
+            self.output_ejecucion.see(tk.END)
+            self.output_ejecucion.update()
+            
+            # PASO 5: EJECUTAR el programa completo
+            execution_success = self._execute_program(cleaned_quadruples, user_inputs)
+            
+            self.output_ejecucion.insert(tk.END, "=" * 50 + "\n")
+            if execution_success:
+                self.output_ejecucion.insert(tk.END, "Ejecución completada exitosamente\n")
+            else:
+                self.output_ejecucion.insert(tk.END, "Ejecución terminada con errores\n")
             
             self.output_ejecucion.config(state=tk.DISABLED)
-            self.output_errores.config(state=tk.DISABLED)
             
         except Exception as e:
-            self.output_errores.config(state=tk.NORMAL)
-            self.output_errores.insert(tk.END, f"Error durante ejecución: {str(e)}\n")
-            self.output_errores.config(state=tk.DISABLED)
+            self.output_ejecucion.insert(tk.END, f"ERROR durante ejecución: {str(e)}\n")
             self.output_ejecucion.config(state=tk.DISABLED)
+    
+    def _remove_duplicate_quadruples(self, quadruples):
+        """Elimina cuádruplos duplicados CORREGIDO - conserva cálculos"""
+        seen = set()
+        unique_quads = []
+        
+        for quad in quadruples:
+            # Crear una representación única de cada cuádruplo
+            if quad['type'] == 'assign':
+                # CONSERVAR asignaciones a diferentes variables
+                key = f"assign_{quad['target']}_{quad['source']}"
+            elif quad['type'] == 'binary_op':
+                # CONSERVAR operaciones con diferentes targets
+                key = f"binary_{quad['target']}_{quad['left']}_{quad['operator']}_{quad['right']}"
+            elif quad['type'] == 'output':
+                # CONSERVAR outputs diferentes
+                key = f"output_{quad['value']}"
+            elif quad['type'] == 'input':
+                # CONSERVAR inputs diferentes
+                key = f"input_{quad['target']}"
+            else:
+                key = str(quad)  # Para tipos desconocidos
+            
+            if key not in seen:
+                seen.add(key)
+                unique_quads.append(quad)
+            else:
+                print(f"→ Eliminado duplicado: {quad}")
+        
+        return unique_quads
+
+    def _execute_program(self, quadruples, user_inputs):
+        """Ejecuta el programa con los inputs proporcionados - EVITA DUPLICADOS"""
+        memory = {}
+        
+        try:
+            for i, quad in enumerate(quadruples):
+                if quad['type'] == 'assign':
+                    target = quad['target']
+                    source = quad['source']
+                    memory[target] = source
+                    
+                elif quad['type'] == 'binary_op':
+                    result = self._execute_binary_operation(quad, memory)
+                    if result is not None:
+                        memory[quad['target']] = result
+                    
+                elif quad['type'] == 'output':
+                    self._execute_output(quad, memory, user_inputs)
+                    
+                elif quad['type'] == 'input':
+                    # LOS INPUTS YA FUERON PROCESADOS EN LA VENTANA MODAL
+                    # Solo usar los valores que ya fueron validados
+                    target = quad['target']
+                    if target in user_inputs:
+                        memory[target] = user_inputs[target]
+                        # NO mostrar mensaje adicional para evitar duplicados
+                        # self.output_ejecucion.insert(tk.END, f"[INPUT] Valor para '{target}': {user_inputs[target]}\n", "info")
+                    else:
+                        memory[target] = 0  # Valor por defecto (no debería ocurrir)
+                        
+            return True
+            
+        except Exception as e:
+            self.output_ejecucion.insert(tk.END, f"ERROR en ejecución: {str(e)}\n", "error")
+            return False
+
+    def _create_blocking_input_window(self, input_instructions, symbol_table=None, previous_outputs=None):
+        """Crea una ventana MODAL que muestra los outputs anteriores y pide inputs con tipo de dato"""
+        input_window = tk.Toplevel(self.root)
+        input_window.title("Entrada de Datos Requerida - COMPILACIÓN BLOQUEADA")
+        input_window.geometry("600x500")  # Un poco más ancho para mostrar el tipo
+        input_window.configure(bg='#f5f5f5')
+        input_window.resizable(False, False)
+        
+        # Hacer la ventana modal y bloqueante
+        input_window.transient(self.root)
+        input_window.grab_set()
+        input_window.focus_force()
+        
+        # Centrar la ventana
+        input_window.geometry("+%d+%d" % (
+            self.root.winfo_rootx() + 50,
+            self.root.winfo_rooty() + 50
+        ))
+        
+        # Frame principal
+        main_frame = tk.Frame(input_window, bg='#f5f5f5', padx=25, pady=25)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Título con advertencia
+        title_label = tk.Label(main_frame, 
+                            text="⚠ COMPILACIÓN BLOQUEADA",
+                            font=('Arial', 14, 'bold'),
+                            bg='#f5f5f5',
+                            fg='#e74c3c')
+        title_label.pack(pady=(0, 10))
+        
+        # Descripción
+        desc_label = tk.Label(main_frame,
+                            text="El programa requiere entrada de datos para continuar:",
+                            font=('Arial', 10),
+                            bg='#f5f5f5',
+                            fg='#34495e',
+                            wraplength=550,
+                            justify=tk.LEFT)
+        desc_label.pack(pady=(0, 15))
+        
+        # MOSTRAR OUTPUTS ANTERIORES (como cout << "Ingresa un numero")
+        if previous_outputs:
+            output_frame = tk.Frame(main_frame, bg='#e8f4fd', relief='solid', bd=1)
+            output_frame.pack(fill=tk.X, pady=(0, 15), padx=5)
+            
+            output_label = tk.Label(output_frame,
+                                text="Salida del programa:",
+                                font=('Arial', 10, 'bold'),
+                                bg='#e8f4fd',
+                                fg='#2c3e50')
+            output_label.pack(pady=(8, 5))
+            
+            # Frame para el texto de salida
+            text_frame = tk.Frame(output_frame, bg='#e8f4fd')
+            text_frame.pack(fill=tk.X, padx=10, pady=(0, 8))
+            
+            for output in previous_outputs:
+                output_text = tk.Label(text_frame,
+                                    text=output,
+                                    font=('Arial', 10),
+                                    bg='#e8f4fd',
+                                    fg='#34495e',
+                                    justify=tk.LEFT,
+                                    anchor='w',
+                                    wraplength=530)
+                output_text.pack(fill=tk.X, pady=2)
+            
+            # Separador
+            separator = ttk.Separator(main_frame, orient='horizontal')
+            separator.pack(fill=tk.X, pady=10)
+        
+        # Instrucción para el usuario
+        instruction_label = tk.Label(main_frame,
+                                text="Ingrese los valores requeridos:",
+                                font=('Arial', 11, 'bold'),
+                                bg='#f5f5f5',
+                                fg='#2c3e50')
+        instruction_label.pack(pady=(0, 10))
+        
+        # Contenedor para inputs
+        input_frame = tk.Frame(main_frame, bg='#f5f5f5')
+        input_frame.pack(fill=tk.BOTH, expand=True)
+        
+        input_entries = {}
+        
+        for i, instruction in enumerate(input_instructions):
+            var_name = instruction['target']
+            
+            # Obtener el tipo de dato de la tabla de símbolos
+            var_type = "int"  # Por defecto
+            if symbol_table and var_name in symbol_table:
+                var_type = symbol_table[var_name].get('tipo', 'int')
+            
+            # Mapear tipos a descripciones más amigables
+            type_descriptions = {
+                'int': 'número entero',
+                'float': 'número decimal', 
+                'string': 'texto',
+                'bool': 'booleano (true/false)',
+                'double': 'número decimal'
+            }
+            type_description = type_descriptions.get(var_type, 'número entero')
+            
+            # Frame para cada input
+            var_frame = tk.Frame(input_frame, bg='#f5f5f5')
+            var_frame.pack(fill=tk.X, pady=8)
+            
+            # Frame para etiqueta e información de tipo
+            label_frame = tk.Frame(var_frame, bg='#f5f5f5')
+            label_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
+            
+            # Etiqueta con nombre de variable
+            label = tk.Label(label_frame, 
+                            text=f"Valor para '{var_name}':",
+                            font=('Arial', 11, 'bold'),
+                            bg='#f5f5f5',
+                            fg='#2c3e50',
+                            anchor='w')
+            label.pack(fill=tk.X)
+            
+            # Información del tipo de dato
+            type_label = tk.Label(label_frame,
+                                text=f"Tipo: {type_description}",
+                                font=('Arial', 9),
+                                bg='#f5f5f5',
+                                fg='#7f8c8d',
+                                anchor='w')
+            type_label.pack(fill=tk.X)
+            
+            # Campo de entrada
+            entry = tk.Entry(var_frame, 
+                            font=('Arial', 11),
+                            bg='white',
+                            fg='#2c3e50',
+                            relief='solid',
+                            bd=2,
+                            width=20)
+            entry.pack(side=tk.RIGHT, padx=(10, 0))
+            
+            # Tooltip con ejemplos según el tipo
+            examples = {
+                'int': 'Ej: 42, -15, 0',
+                'float': 'Ej: 3.14, -2.5, 0.0',
+                'string': 'Ej: Hola, texto123',
+                'bool': 'Ej: true, false, 1, 0',
+                'double': 'Ej: 3.14159, -2.71828'
+            }
+            
+            def create_tooltip(widget, text):
+                def show_tooltip(event):
+                    tooltip = tk.Toplevel(widget)
+                    tooltip.wm_overrideredirect(True)
+                    tooltip.wm_geometry(f"+{event.x_root+10}+{event.y_root+10}")
+                    label = tk.Label(tooltip, text=text, background="#ffffe0", 
+                                relief="solid", borderwidth=1, font=('Arial', 9))
+                    label.pack()
+                    tooltip.after(200, tooltip.destroy)
+                widget.bind("<Enter>", show_tooltip)
+            
+            create_tooltip(entry, examples.get(var_type, 'Ingrese un valor'))
+            
+            # Guardar referencia
+            input_entries[var_name] = entry
+            
+            # Focus en el primer campo
+            if i == 0:
+                entry.focus()
+        
+        # Frame para botones
+        button_frame = tk.Frame(main_frame, bg='#f5f5f5')
+        button_frame.pack(fill=tk.X, pady=(20, 0))
+
+        def submit_inputs():
+            """Procesa los inputs ingresados con validación de tipos"""
+            user_inputs = {}
+            valid_inputs = True
+            
+            for var_name, entry in input_entries.items():
+                value = entry.get().strip()
+                
+                if not value:
+                    tk.messagebox.showerror("Error", f"El campo '{var_name}' no puede estar vacío")
+                    entry.config(bg='#ffebee')
+                    entry.focus()
+                    valid_inputs = False
+                    break
+                
+                # Obtener el tipo de dato
+                var_type = "int"
+                if symbol_table and var_name in symbol_table:
+                    var_type = symbol_table[var_name].get('tipo', 'int')
+                
+                try:
+                    # Validar según el tipo
+                    if var_type == 'int':
+                        user_inputs[var_name] = int(value)
+                    elif var_type == 'float' or var_type == 'double':
+                        user_inputs[var_name] = float(value)
+                    elif var_type == 'bool':
+                        # Aceptar diferentes formatos de booleanos
+                        if value.lower() in ['true', 'verdadero', '1', 'si', 'yes']:
+                            user_inputs[var_name] = True
+                        elif value.lower() in ['false', 'falso', '0', 'no']:
+                            user_inputs[var_name] = False
+                        else:
+                            raise ValueError(f"Valor booleano inválido: {value}")
+                    elif var_type == 'string':
+                        user_inputs[var_name] = str(value)
+                    else:
+                        # Por defecto tratar como int
+                        user_inputs[var_name] = int(value)
+                    
+                    entry.config(bg='#f0fff0')  # Verde claro para éxito
+                    
+                except ValueError as e:
+                    error_msg = f"Valor inválido para '{var_name}'.\n"
+                    error_msg += f"Se esperaba: {type_descriptions.get(var_type, 'número entero')}\n"
+                    error_msg += f"Ejemplos: {examples.get(var_type, '42, -15, 0')}"
+                    
+                    tk.messagebox.showerror("Error de tipo", error_msg)
+                    entry.config(bg='#ffebee')
+                    entry.focus()
+                    entry.select_range(0, tk.END)
+                    valid_inputs = False
+                    break
+            
+            if valid_inputs:
+                self._user_inputs = user_inputs
+                input_window.destroy()
+
+        def cancel_execution():
+            """Cancela la ejecución completamente"""
+            self._user_inputs = {}
+            input_window.destroy()
+        
+        # Botón OK (verde)
+        ok_btn = tk.Button(button_frame,
+                        text="✅ EJECUTAR",
+                        font=('Arial', 11, 'bold'),
+                        bg='#27ae60',
+                        fg='white',
+                        relief='raised',
+                        padx=20,
+                        pady=8,
+                        command=submit_inputs)
+        ok_btn.pack(side=tk.RIGHT, padx=(10, 5))
+        
+        # Botón Cancelar (rojo)
+        cancel_btn = tk.Button(button_frame,
+                            text="❌ CANCELAR",
+                            font=('Arial', 11),
+                            bg='#e74c3c',
+                            fg='white',
+                            relief='raised',
+                            padx=20,
+                            pady=8,
+                            command=cancel_execution)
+        cancel_btn.pack(side=tk.RIGHT, padx=(5, 0))
+        
+        # Enter para enviar
+        input_window.bind('<Return>', lambda e: submit_inputs())
+        
+        # Escape para cancelar
+        input_window.bind('<Escape>', lambda e: cancel_execution())
+        
+        # Hacer que la ventana sea realmente modal
+        input_window.protocol("WM_DELETE_WINDOW", cancel_execution)
+        
+        return input_window
+
+
+    def _setup_execution_tags(self):
+        """Configura los tags para texto formateado en la ejecución - MOVER DESPUÉS de create_editor_and_execution"""
+        # Verificar que output_ejecucion existe
+        if not hasattr(self, 'output_ejecucion') or self.output_ejecucion is None:
+            return
+            
+        tags_config = {
+            'header': {'foreground': '#2c3e50', 'font': ('Arial', 12, 'bold')},
+            'success': {'foreground': '#27ae60', 'font': ('Arial', 10, 'bold')},
+            'error': {'foreground': '#e74c3c', 'font': ('Arial', 10, 'bold')},
+            'info': {'foreground': '#3498db', 'font': ('Arial', 10, 'bold')},
+            'executing': {'foreground': '#f39c12', 'font': ('Arial', 10, 'bold')},
+        }
+        
+        for tag_name, config in tags_config.items():
+            self.output_ejecucion.tag_config(tag_name, **config)
+
+    def _execute_binary_operation(self, quad, memory):
+        """Ejecuta una operación binaria"""
+        left = quad['left']
+        right = quad['right']
+        operator = quad['operator']
+        
+        # Obtener valores
+        left_val = memory.get(left, left) if isinstance(left, str) else left
+        right_val = memory.get(right, right) if isinstance(right, str) else right
+        
+        # Convertir strings a números si es necesario
+        if isinstance(left_val, str):
+            try:
+                left_val = float(left_val) if '.' in str(left_val) else int(left_val)
+            except:
+                left_val = 0
+        if isinstance(right_val, str):
+            try:
+                right_val = float(right_val) if '.' in str(right_val) else int(right_val)
+            except:
+                right_val = 0
+        
+        # Ejecutar operación
+        if operator == '+': 
+            return left_val + right_val
+        elif operator == '-': 
+            return left_val - right_val
+        elif operator == '*': 
+            return left_val * right_val
+        elif operator == '/': 
+            return left_val / right_val if right_val != 0 else 0
+        else: 
+            return 0
+
+
+    def _execute_output(self, quad, memory, user_inputs):
+        """Ejecuta una instrucción de output"""
+        value = quad['value']
+        
+        if value.startswith('"'):  # String literal
+            output_text = value.strip('"')
+            self.output_ejecucion.insert(tk.END, output_text)
+        else:  # Variable o expresión
+            # Buscar en memoria, inputs de usuario, o usar valor directo
+            output_value = memory.get(value, user_inputs.get(value, value))
+            self.output_ejecucion.insert(tk.END, str(output_value))
+        
+        self.output_ejecucion.see(tk.END)
+        self.output_ejecucion.update()
+
+    def _execute_quadruples_with_input(self, quadruples):
+
+        """Ejecuta los cuádruplos con un método mejorado para input()"""
+        memory = {}
+        
+        for i, quad in enumerate(quadruples):
+            print(f"Ejecutando cuádruplo {i}: {quad}")
+            
+            if quad['type'] == 'assign':
+                target = quad['target']
+                source = quad['source']
+                memory[target] = source
+                
+            elif quad['type'] == 'binary_op':
+                target = quad['target']
+                left = quad['left']
+                right = quad['right']
+                operator = quad['operator']
+                
+                left_val = memory.get(left, left) if isinstance(left, str) else left
+                right_val = memory.get(right, right) if isinstance(right, str) else right
+                
+                if isinstance(left_val, str):
+                    try:
+                        left_val = float(left_val) if '.' in str(left_val) else int(left_val)
+                    except:
+                        left_val = 0
+                if isinstance(right_val, str):
+                    try:
+                        right_val = float(right_val) if '.' in str(right_val) else int(right_val)
+                    except:
+                        right_val = 0
+                
+                if operator == '+': result = left_val + right_val
+                elif operator == '-': result = left_val - right_val
+                elif operator == '*': result = left_val * right_val
+                elif operator == '/': result = left_val / right_val if right_val != 0 else 0
+                else: result = 0
+                    
+                memory[target] = result
+                
+            elif quad['type'] == 'output':
+                value = quad['value']
+                
+                if value.startswith('"'):  # String
+                    output_text = value.strip('"')
+                    self.output_ejecucion.insert(tk.END, output_text)
+                else:  # Variable
+                    output_value = memory.get(value, 0)
+                    self.output_ejecucion.insert(tk.END, str(output_value))
+                
+                self.output_ejecucion.see(tk.END)
+                self.output_ejecucion.update()
+                    
+            elif quad['type'] == 'input':
+                target = quad['target']
+                
+                # Usar el nuevo método de input
+                prompt = f"Ingresa valor para {target}:"
+                user_input = self._ask_for_input_simple(prompt)
+                
+                # Convertir y guardar
+                try:
+                    if '.' in user_input:
+                        memory[target] = float(user_input)
+                    else:
+                        memory[target] = int(user_input)
+                except (ValueError, TypeError):
+                    memory[target] = user_input if user_input is not None else 0
+
+    def _execute_quadruples_direct(self, quadruples):
+        """Ejecuta los cuádruplos usando input() de consola como fallback"""
+        memory = {}
+        
+        for i, quad in enumerate(quadruples):
+            print(f"Ejecutando cuádruplo {i}: {quad}")
+            
+            if quad['type'] == 'assign':
+                target = quad['target']
+                source = quad['source']
+                memory[target] = source
+                
+            elif quad['type'] == 'binary_op':
+                target = quad['target']
+                left = quad['left']
+                right = quad['right']
+                operator = quad['operator']
+                
+                left_val = memory.get(left, left) if isinstance(left, str) else left
+                right_val = memory.get(right, right) if isinstance(right, str) else right
+                
+                if isinstance(left_val, str):
+                    try:
+                        left_val = float(left_val) if '.' in str(left_val) else int(left_val)
+                    except:
+                        left_val = 0
+                if isinstance(right_val, str):
+                    try:
+                        right_val = float(right_val) if '.' in str(right_val) else int(right_val)
+                    except:
+                        right_val = 0
+                
+                if operator == '+': result = left_val + right_val
+                elif operator == '-': result = left_val - right_val
+                elif operator == '*': result = left_val * right_val
+                elif operator == '/': result = left_val / right_val if right_val != 0 else 0
+                else: result = 0
+                    
+                memory[target] = result
+                
+            elif quad['type'] == 'output':
+                value = quad['value']
+                
+                if value.startswith('"'):  # String
+                    output_text = value.strip('"')
+                    self.output_ejecucion.insert(tk.END, output_text)
+                else:  # Variable
+                    output_value = memory.get(value, 0)
+                    self.output_ejecucion.insert(tk.END, str(output_value))
+                
+                self.output_ejecucion.see(tk.END)
+                self.output_ejecucion.update()
+                    
+            elif quad['type'] == 'input':
+                target = quad['target']
+                
+                # USAR input() de consola como fallback
+                try:
+                    # Mostrar prompt en la interfaz
+                    self.output_ejecucion.insert(tk.END, f"\nIngresa valor para {target}: ")
+                    self.output_ejecucion.see(tk.END)
+                    self.output_ejecucion.update()
+                    
+                    # Pedir input por consola
+                    user_input = input(f"Ingresa valor para {target}: ")
+                    
+                    # Mostrar lo ingresado en la interfaz
+                    self.output_ejecucion.insert(tk.END, f"{user_input}\n")
+                    self.output_ejecucion.see(tk.END)
+                    self.output_ejecucion.update()
+                    
+                    # Convertir y guardar
+                    try:
+                        if '.' in user_input:
+                            memory[target] = float(user_input)
+                        else:
+                            memory[target] = int(user_input)
+                    except ValueError:
+                        memory[target] = user_input
+                        
+                except Exception as e:
+                    print(f"Error con input: {e}")
+                    memory[target] = 0
+
+    
+    def _get_user_input(self, prompt):
+        """Obtiene input del usuario usando un diálogo modal"""
+        from tkinter import simpledialog
+        
+        # Mostrar el prompt en el área de ejecución
+        self.output_ejecucion.insert(tk.END, f"\n{prompt}")
+        self.output_ejecucion.see(tk.END)
+        self.output_ejecucion.update()
+        
+        # Usar askstring que es más confiable
+        user_input = simpledialog.askstring("Entrada requerida", prompt, parent=self.root)
+        
+        # Si el usuario cancela, usar un valor por defecto
+        if user_input is None:
+            user_input = "0"  # Valor por defecto
+        
+        return user_input
+
+    def _ask_for_input_simple(self, prompt):
+        """Pide input al usuario de forma SIMPLE y DIRECTA"""
+        import tkinter.simpledialog as simpledialog
+        
+        # FORZAR que se muestre el prompt en el output
+        self.output_ejecucion.insert(tk.END, f"\n{prompt} ")
+        self.output_ejecucion.see(tk.END)
+        self.output_ejecucion.update()
+        self.root.update()  # Esto es CRUCIAL
+        
+        # Usar un diálogo de tkinter que SÍ funciona
+        user_input = simpledialog.askstring("Input requerido", prompt, parent=self.root)
+        
+        return user_input
+
+    def _generate_manual_quadruples(self, ast, input_text):
+        """Genera cuádruplos manualmente - VERSIÓN MEJORADA"""
+        quadruples = []
+        temp_counter = 0
+        variable_values = {}  # Diccionario para guardar valores de variables
+        
+        def new_temp():
+            nonlocal temp_counter
+            temp = f"t{temp_counter}"
+            temp_counter += 1
+            return temp
+        
+        def get_value(node):
+            """Obtiene el valor de un nodo de manera segura"""
+            if node is None:
+                return None
+                
+            # Si es un valor primitivo, retornarlo directamente
+            if not hasattr(node, 'type'):
+                return node
+                
+            node_type = node.type
+            
+            if node_type == 'numero':
+                return getattr(node, 'value', 0)
+                
+            elif node_type == 'identificador':
+                var_name = getattr(node, 'value', None)
+                if var_name:
+                    # Retornar el valor de la variable si está disponible
+                    return variable_values.get(var_name, var_name)
+                return None
+                
+            elif node_type == 'expresion_binaria':
+                if hasattr(node, 'children') and len(node.children) >= 2:
+                    left_val = get_value(node.children[0])
+                    right_val = get_value(node.children[1])
+                    operator = getattr(node, 'value', '+')
+                    
+                    # Si ambos operandos son números, CALCULAR el resultado
+                    if isinstance(left_val, int) and isinstance(right_val, int):
+                        if operator == '+':
+                            return left_val + right_val
+                        elif operator == '-':
+                            return left_val - right_val
+                        elif operator == '*':
+                            return left_val * right_val
+                        elif operator == '/':
+                            return left_val // right_val if right_val != 0 else 0
+                    
+                    # Si no se puede calcular, crear temporal
+                    temp = new_temp()
+                    quadruples.append({
+                        'type': 'binary_op',
+                        'target': temp,
+                        'operator': operator,
+                        'left': left_val,
+                        'right': right_val
+                    })
+                    return temp
+                    
+            elif node_type == 'string_literal':
+                return f'"{getattr(node, "value", "")}"'
+                
+            return None
+        
+        def process_node(node):
+            """Procesa un nodo del AST de manera segura"""
+            if node is None or not hasattr(node, 'type'):
+                return
+                
+            node_type = node.type
+            
+            if node_type == 'output':
+                if hasattr(node, 'children') and node.children:
+                    for child in node.children:
+                        # Manejar strings directos primero (sin procesar como expresión)
+                        if isinstance(child, str):
+                            quadruples.append({'type': 'output', 'value': f'"{child}"'})
+                            continue
+                        
+                        # Procesar como expresión normal
+                        value = get_value(child)
+                        if value is not None:
+                            if isinstance(value, int):
+                                quadruples.append({'type': 'output', 'value': value})
+                            else:
+                                quadruples.append({'type': 'output', 'value': value})
+            
+            elif node_type == 'asignacion':
+                if hasattr(node, 'children') and len(node.children) >= 2:
+                    target = node.children[0]
+                    source = node.children[1]
+                    
+                    if hasattr(target, 'value'):
+                        target_name = target.value
+                        source_value = get_value(source)
+                        
+                        if source_value is not None:
+                            # Guardar el valor de la variable
+                            variable_values[target_name] = source_value
+                            
+                            # Solo generar cuádruplo si no es un cálculo directo
+                            if not isinstance(source_value, int):
+                                quadruples.append({
+                                    'type': 'assign', 
+                                    'target': target_name, 
+                                    'source': source_value
+                                })
+            
+            # Procesar hijos recursivamente
+            if hasattr(node, 'children'):
+                for child in node.children:
+                    # Verificar que el hijo sea un nodo válido antes de procesarlo
+                    if child is not None and (not isinstance(child, str) or hasattr(child, 'type')):
+                        process_node(child)
+        
+        # Procesar el AST
+        if ast and hasattr(ast, 'type'):
+            process_node(ast)
+        
+        # Si no se encontraron outputs, buscar en el texto
+        if not any(q['type'] == 'output' for q in quadruples) and 'cout' in input_text:
+            # Buscar strings entre comillas en el texto
+            import re
+            string_matches = re.findall(r'cout\s*<<\s*"([^"]*)"', input_text)
+            if string_matches:
+                quadruples.append({'type': 'output', 'value': f'"{string_matches[0]}"'})
+            else:
+                # Usar la última variable calculada
+                if variable_values:
+                    last_var = list(variable_values.keys())[-1]
+                    last_value = variable_values[last_var]
+                    if isinstance(last_value, int):
+                        quadruples.append({'type': 'output', 'value': last_value})
+                    else:
+                        quadruples.append({'type': 'output', 'value': last_var})
+        
+        return quadruples
+        
+
+
+    def _generate_working_llvm(self, quadruples, input_text):
+        """Genera código LLVM CORREGIDO - VERSIÓN SIMPLIFICADA"""
+        llvm_lines = []
+        
+        print("=== DEPURACIÓN LLVM: INICIANDO ===")
+        print(f"Cuádruplos a procesar: {len(quadruples)}")
+        for i, q in enumerate(quadruples):
+            print(f"  {i}: {q}")
+        
+        # Si no hay cuádruplos, generar código mínimo
+        if not quadruples:
+            print("→ No hay cuádruplos, generando código mínimo")
+            llvm_lines.append('target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"')
+            llvm_lines.append('target triple = "x86_64-pc-linux-gnu"')
+            llvm_lines.append('')
+            llvm_lines.append('define i32 @main() {')
+            llvm_lines.append('  ret i32 0')
+            llvm_lines.append('}')
+            return '\n'.join(llvm_lines)
+        
+        # Cabecera
+        llvm_lines.append('target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"')
+        llvm_lines.append('target triple = "x86_64-pc-linux-gnu"')
+        llvm_lines.append('')
+        
+        # Declaraciones
+        llvm_lines.append('declare i32 @printf(i8*, ...)')
+        llvm_lines.append('')
+        
+        # Strings constantes
+        llvm_lines.append('@.str_int = private unnamed_addr constant [4 x i8] c"%d\\0A\\00"')
+        
+        # Recopilar strings para outputs
+        string_outputs = []
+        for quad in quadruples:
+            if quad['type'] == 'output':
+                value = quad.get('value', '')
+                if isinstance(value, str) and value.startswith('"'):
+                    string_content = value.strip('"')
+                    if string_content not in string_outputs:
+                        string_outputs.append(string_content)
+        
+        # Agregar strings constantes para outputs
+        for i, string_content in enumerate(string_outputs):
+            str_name = f"@.str_{i}"
+            llvm_lines.append(f'{str_name} = private unnamed_addr constant [{len(string_content) + 2} x i8] c"{string_content}\\0A\\00"')
+        
+        if string_outputs:
+            llvm_lines.append('')
+        
+        # Función main
+        llvm_lines.append('define i32 @main() {')
+        
+        # Recopilar variables para declarar
+        all_vars = set()
+        for quad in quadruples:
+            if quad['type'] == 'assign':
+                target = quad.get('target', '')
+                if target and isinstance(target, str) and target not in ['+', '-', '*', '/']:
+                    all_vars.add(target)
+            elif quad['type'] == 'binary_op':
+                left = quad.get('left', '')
+                right = quad.get('right', '')
+                if left and isinstance(left, str) and not left.startswith('t') and left not in ['+', '-', '*', '/']:
+                    all_vars.add(left)
+                if right and isinstance(right, str) and not right.startswith('t') and right not in ['+', '-', '*', '/']:
+                    all_vars.add(right)
+            elif quad['type'] == 'output':
+                value = quad.get('value', '')
+                if value and isinstance(value, str) and not value.startswith('"') and not value.startswith('t') and value not in ['+', '-', '*', '/']:
+                    all_vars.add(value)
+        
+        # Declarar variables
+        for var in sorted(all_vars):
+            llvm_lines.append(f'  %{var}_addr = alloca i32')
+            llvm_lines.append(f'  store i32 0, i32* %{var}_addr')
+        
+        if all_vars:
+            llvm_lines.append('')
+        
+        # Procesar cuádruplos
+        temp_counter = 0
+        
+        for quad in quadruples:
+            if quad['type'] == 'assign':
+                target = quad.get('target', '')
+                source = quad.get('source', '')
+                
+                if not target or target in ['+', '-', '*', '/']:
+                    continue
+                    
+                # Convertir source
+                if isinstance(source, int):
+                    source_val = str(source)
+                elif isinstance(source, str):
+                    if source.startswith('t'):
+                        source_val = f'%{source}'
+                    elif source in all_vars:
+                        temp_load = f'%temp_load_{temp_counter}'
+                        temp_counter += 1
+                        llvm_lines.append(f'  {temp_load} = load i32, i32* %{source}_addr')
+                        source_val = temp_load
+                    else:
+                        try:
+                            source_val = str(int(source))
+                        except:
+                            source_val = '0'
+                else:
+                    source_val = '0'
+                
+                llvm_lines.append(f'  store i32 {source_val}, i32* %{target}_addr')
+                
+            elif quad['type'] == 'binary_op':
+                target = quad.get('target', '')
+                left = quad.get('left', '')
+                right = quad.get('right', '')
+                operator = quad.get('operator', '+')
+                
+                # Función para cargar operandos
+                def load_operand(op):
+                    if isinstance(op, int):
+                        return str(op)
+                    elif isinstance(op, str):
+                        if op.startswith('t'):
+                            return f'%{op}'
+                        elif op in all_vars:
+                            nonlocal temp_counter
+                            temp_load = f'%temp_op_{temp_counter}'
+                            temp_counter += 1
+                            llvm_lines.append(f'  {temp_load} = load i32, i32* %{op}_addr')
+                            return temp_load
+                        else:
+                            try:
+                                return str(int(op))
+                            except:
+                                return '0'
+                    return '0'
+                
+                left_val = load_operand(left)
+                right_val = load_operand(right)
+                
+                if operator == '+':
+                    llvm_lines.append(f'  %{target} = add i32 {left_val}, {right_val}')
+                elif operator == '-':
+                    llvm_lines.append(f'  %{target} = sub i32 {left_val}, {right_val}')
+                elif operator == '*':
+                    llvm_lines.append(f'  %{target} = mul i32 {left_val}, {right_val}')
+                elif operator == '/':
+                    llvm_lines.append(f'  %{target} = sdiv i32 {left_val}, {right_val}')
+                    
+            elif quad['type'] == 'output':
+                value = quad.get('value', '')
+                
+                # OUTPUT DE NÚMERO
+                if isinstance(value, int):
+                    llvm_lines.append(f'  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str_int, i32 0, i32 0), i32 {value})')
+                
+                # OUTPUT DE STRING
+                elif isinstance(value, str) and value.startswith('"'):
+                    string_content = value.strip('"')
+                    # Encontrar el string constante
+                    for i, custom_str in enumerate(string_outputs):
+                        if custom_str == string_content:
+                            llvm_lines.append(f'  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([{len(string_content) + 2} x i8], [{len(string_content) + 2} x i8]* @.str_{i}, i32 0, i32 0))')
+                            break
+                
+                # OUTPUT DE VARIABLE
+                else:
+                    if isinstance(value, str):
+                        if value.startswith('t'):
+                            value_to_print = f'%{value}'
+                        elif value in all_vars:
+                            temp_load_out = f'%temp_out_{temp_counter}'
+                            temp_counter += 1
+                            llvm_lines.append(f'  {temp_load_out} = load i32, i32* %{value}_addr')
+                            value_to_print = temp_load_out
+                        else:
+                            try:
+                                value_to_print = str(int(value))
+                            except:
+                                value_to_print = '0'
+                    else:
+                        value_to_print = '0'
+                    
+                    llvm_lines.append(f'  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str_int, i32 0, i32 0), i32 {value_to_print})')
+        
+        # Retorno
+        llvm_lines.append('  ret i32 0')
+        llvm_lines.append('}')
+        
+        print("=== DEPURACIÓN LLVM: FIN ===")
+        return '\n'.join(llvm_lines)
+
+    def _optimize_quadruples(self, quadruples, input_text):
+        """Optimiza los cuádruplos CORREGIDO - NO elimina variables de cálculo"""
+        if not quadruples:
+            return quadruples
+        
+        print("=== OPTIMIZACIÓN CORREGIDA: INICIANDO ===")
+        
+        try:
+            # Paso 1: Encontrar TODAS las variables usadas en CUALQUIER operación
+            used_vars = set()
+            
+            for quad in quadruples:
+                if not isinstance(quad, dict):
+                    continue
+                    
+                quad_type = quad.get('type', '')
+                
+                # Variables en asignaciones (target)
+                if quad_type == 'assign':
+                    target = quad.get('target', '')
+                    if target and isinstance(target, str) and not target.startswith('t'):
+                        used_vars.add(target)
+                
+                # Variables en operaciones binarias (left y right)
+                elif quad_type == 'binary_op':
+                    left = quad.get('left', '')
+                    right = quad.get('right', '')
+                    # CONSERVAR variables usadas en cálculos, aunque no se muestren
+                    if left and isinstance(left, str) and not left.startswith('t'):
+                        used_vars.add(left)
+                    if right and isinstance(right, str) and not right.startswith('t'):
+                        used_vars.add(right)
+                
+                # Variables en outputs
+                elif quad_type == 'output':
+                    value = quad.get('value', '')
+                    if (value and isinstance(value, str) and 
+                        not value.startswith('"') and not value.startswith('t')):
+                        used_vars.add(value)
+                
+                # Variables en inputs
+                elif quad_type == 'input':
+                    target = quad.get('target', '')
+                    if target and isinstance(target, str):
+                        used_vars.add(target)
+            
+            print(f"Variables usadas en cualquier operación: {used_vars}")
+            
+            # Paso 2: Encontrar todas las variables declaradas (en el código fuente)
+            declared_vars = set()
+            lines = input_text.split('\n')
+            for line in lines:
+                line = line.strip()
+                # Buscar declaraciones: int a; int b; etc.
+                if line.startswith('int '):
+                    # Extraer nombres de variables después de 'int'
+                    var_part = line[4:].split(';')[0]  # Tomar hasta el primer ;
+                    var_names = [v.strip() for v in var_part.split(',')]
+                    for var_name in var_names:
+                        if var_name and var_name.isidentifier():
+                            declared_vars.add(var_name)
+            
+            print(f"Variables declaradas: {declared_vars}")
+            
+            # Paso 3: Encontrar variables NO utilizadas en NINGUNA operación
+            unused_vars = declared_vars - used_vars
+            print(f"Variables realmente no utilizadas: {unused_vars}")
+            
+            # Paso 4: Eliminar SOLO asignaciones a variables realmente no utilizadas
+            optimized_quads = []
+            removed_assignments = 0
+            
+            for quad in quadruples:
+                if not isinstance(quad, dict):
+                    optimized_quads.append(quad)
+                    continue
+                    
+                keep_quad = True
+                
+                if quad.get('type') == 'assign':
+                    target = quad.get('target', '')
+                    # Eliminar asignación SOLO si el target no se usa en NINGUNA operación
+                    if target in unused_vars:
+                        keep_quad = False
+                        removed_assignments += 1
+                        print(f"→ ELIMINADA asignación a variable realmente no usada: {target}")
+                
+                if keep_quad:
+                    optimized_quads.append(quad)
+            
+            # Si no hay variables no utilizadas, retornar sin cambios
+            if not unused_vars:
+                print("→ No hay variables realmente no utilizadas para optimizar")
+                return optimized_quads
+            
+            print(f"=== OPTIMIZACIÓN CORREGIDA: RESUMEN ===")
+            print(f"Variables eliminadas: {len(unused_vars)}")
+            print(f"Asignaciones eliminadas: {removed_assignments}")
+            print(f"Cuádruplos originales: {len(quadruples)}")
+            print(f"Cuádruplos optimizados: {len(optimized_quads)}")
+            print("=== OPTIMIZACIÓN CORREGIDA: FIN ===")
+            
+            return optimized_quads
+            
+        except Exception as e:
+            print(f"Error durante optimización: {e}")
+            # En caso de error, retornar los cuádruplos originales
+            return quadruples
+    
+    def _generate_simple_llvm(self, quadruples):
+        """Genera código LLVM con soporte para input/output"""
+        llvm_lines = []
+        
+        # Cabecera
+        llvm_lines.append('target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"')
+        llvm_lines.append('target triple = "x86_64-pc-linux-gnu"')
+        llvm_lines.append('')
+        
+        # Declaraciones externas
+        llvm_lines.append('declare i32 @printf(i8*, ...)')
+        llvm_lines.append('declare i32 @scanf(i8*, ...)')
+        llvm_lines.append('declare i32 @__isoc99_scanf(i8*, ...)')  # Para Linux
+        llvm_lines.append('')
+        
+        # Format strings
+        llvm_lines.append('@.str_int = private unnamed_addr constant [3 x i8] c"%d\\00"')
+        llvm_lines.append('@.str_float = private unnamed_addr constant [3 x i8] c"%f\\00"')
+        llvm_lines.append('@.str_string = private unnamed_addr constant [3 x i8] c"%s\\00"')
+        llvm_lines.append('@.str_prompt_nombre = private unnamed_addr constant [23 x i8] c"Ingresa tu nombre: \\00"')
+        llvm_lines.append('@.str_prompt_calificacion = private unnamed_addr constant [26 x i8] c"Ingrese tu calificacion: \\00"')
+        llvm_lines.append('@.str_promedio = private unnamed_addr constant [12 x i8] c"Promedio: \\00"')
+        llvm_lines.append('@.str_newline = private unnamed_addr constant [2 x i8] c"\\0A\\00"')
+        llvm_lines.append('')
+        
+        # Variables globales
+        llvm_lines.append('@nombre = global [100 x i8] zeroinitializer')  # string
+        llvm_lines.append('@calificacion = global float 0.0')
+        llvm_lines.append('@promedio = global float 0.0')
+        llvm_lines.append('@suma = global float 0.0')
+        llvm_lines.append('@i = global i32 0')
+        llvm_lines.append('')
+        
+        # Función main
+        llvm_lines.append('define i32 @main() {')
+        llvm_lines.append('  ; Inicializaciones')
+        llvm_lines.append('  store float 0.0, float* @suma')
+        llvm_lines.append('  store i32 0, i32* @i')
+        llvm_lines.append('')
+        
+        llvm_lines.append('  ; Solicitar nombre')
+        llvm_lines.append('  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([23 x i8], [23 x i8]* @.str_prompt_nombre, i32 0, i32 0))')
+        llvm_lines.append('  call i32 (i8*, ...) @__isoc99_scanf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str_string, i32 0, i32 0), i8* getelementptr inbounds ([100 x i8], [100 x i8]* @nombre, i32 0, i32 0))')
+        llvm_lines.append('')
+        
+        llvm_lines.append('  ; Inicio del while')
+        llvm_lines.append('  br label %while_cond')
+        llvm_lines.append('')
+        
+        llvm_lines.append('while_cond:')
+        llvm_lines.append('  %i_val = load i32, i32* @i')
+        llvm_lines.append('  %cmp = icmp slt i32 %i_val, 4')
+        llvm_lines.append('  br i1 %cmp, label %while_body, label %while_end')
+        llvm_lines.append('')
+        
+        llvm_lines.append('while_body:')
+        llvm_lines.append('  ; Solicitar calificación')
+        llvm_lines.append('  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([26 x i8], [26 x i8]* @.str_prompt_calificacion, i32 0, i32 0))')
+        llvm_lines.append('  call i32 (i8*, ...) @__isoc99_scanf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str_float, i32 0, i32 0), float* @calificacion)')
+        llvm_lines.append('')
+        
+        llvm_lines.append('  ; suma = suma + calificacion')
+        llvm_lines.append('  %suma_val = load float, float* @suma')
+        llvm_lines.append('  %calificacion_val = load float, float* @calificacion')
+        llvm_lines.append('  %suma_nueva = fadd float %suma_val, %calificacion_val')
+        llvm_lines.append('  store float %suma_nueva, float* @suma')
+        llvm_lines.append('')
+        
+        llvm_lines.append('  ; i = i + 1')
+        llvm_lines.append('  %i_val2 = load i32, i32* @i')
+        llvm_lines.append('  %i_nuevo = add nsw i32 %i_val2, 1')
+        llvm_lines.append('  store i32 %i_nuevo, i32* @i')
+        llvm_lines.append('')
+        
+        llvm_lines.append('  br label %while_cond')
+        llvm_lines.append('')
+        
+        llvm_lines.append('while_end:')
+        llvm_lines.append('  ; promedio = suma / 4')
+        llvm_lines.append('  %suma_final = load float, float* @suma')
+        llvm_lines.append('  %promedio_val = fdiv float %suma_final, 4.0')
+        llvm_lines.append('  store float %promedio_val, float* @promedio')
+        llvm_lines.append('')
+        
+        llvm_lines.append('  ; Mostrar resultado')
+        llvm_lines.append('  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str_promedio, i32 0, i32 0))')
+        llvm_lines.append('  %promedio_final = load float, float* @promedio')
+        llvm_lines.append('  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str_float, i32 0, i32 0), float %promedio_final)')
+        llvm_lines.append('  call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_newline, i32 0, i32 0))')
+        llvm_lines.append('')
+        
+        llvm_lines.append('  ret i32 0')
+        llvm_lines.append('}')
+        
+        return '\n'.join(llvm_lines)
+
+    def _generate_llvm_files(self, quadruples, symbol_table):
+        """Genera archivos LLVM, assembly y ejecutable - CORREGIDO"""
+        import os
+        import subprocess
+        import tempfile
+        
+        try:
+            # Generar código LLVM - CORREGIDO: solo 1 parámetro
+            llvm_code = self._generate_simple_llvm(quadruples)
+            
+            # Crear archivos temporales
+            base_name = "programa"
+            llvm_file = f"{base_name}.ll"
+            opt_llvm_file = f"{base_name}_opt.ll"
+            asm_file = f"{base_name}.s"
+            exe_file = f"{base_name}.exe" if os.name == 'nt' else base_name
+            
+            # Escribir LLVM original
+            with open(llvm_file, 'w') as f:
+                f.write(llvm_code)
+            
+            self.output_intermedio.insert(tk.END, f"\n✅ Archivos generados:\n")
+            self.output_intermedio.insert(tk.END, f"• {llvm_file}\n")
+            
+            # Optimizar LLVM (si opt está disponible)
+            try:
+                result = subprocess.run(['opt', '-O3', '-S', llvm_file, '-o', opt_llvm_file], 
+                                    capture_output=True, text=True, timeout=10)
+                if result.returncode == 0:
+                    self.output_intermedio.insert(tk.END, f"• {opt_llvm_file} (optimizado)\n")
+                else:
+                    raise Exception("opt falló")
+            except:
+                # Si opt no funciona, usar el mismo archivo
+                import shutil
+                shutil.copy(llvm_file, opt_llvm_file)
+                self.output_intermedio.insert(tk.END, f"• {opt_llvm_file} (copia)\n")
+            
+            # Compilar a assembly (si llc está disponible)
+            try:
+                result = subprocess.run(['llc', '-O3', opt_llvm_file, '-o', asm_file], 
+                                    capture_output=True, text=True, timeout=10)
+                if result.returncode == 0:
+                    self.output_intermedio.insert(tk.END, f"• {asm_file}\n")
+                else:
+                    raise Exception("llc falló")
+            except:
+                self.output_intermedio.insert(tk.END, f"• {asm_file} (no generado - llc no disponible)\n")
+            
+            # Compilar a ejecutable (si clang está disponible)
+            try:
+                result = subprocess.run(['clang', opt_llvm_file, '-o', exe_file], 
+                                    capture_output=True, text=True, timeout=10)
+                if result.returncode == 0:
+                    self.output_intermedio.insert(tk.END, f"• {exe_file}\n")
+                else:
+                    raise Exception("clang falló")
+            except:
+                self.output_intermedio.insert(tk.END, f"• {exe_file} (no generado - clang no disponible)\n")
+            
+            # Mostrar código LLVM
+            self.output_intermedio.insert(tk.END, f"\n=== CÓDIGO LLVM ===\n")
+            self.output_intermedio.insert(tk.END, llvm_code)
+            
+        except Exception as e:
+            self.output_intermedio.insert(tk.END, f"Error generando archivos: {str(e)}\n")
+            import traceback
+            self.output_intermedio.insert(tk.END, traceback.format_exc())
+    
 
     def _expand_semantic_tree(self):
         """Expande todos los nodos del árbol semántico"""

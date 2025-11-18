@@ -5,35 +5,65 @@ class SymbolTable:
     def __init__(self):
         self.scopes = [{}]
         self.current_scope = 0
+        self.all_symbols = []
 
     def enter_scope(self):
         self.scopes.append({})
         self.current_scope += 1
+        print(f"DEBUG: Entrando a ámbito {self.current_scope}")
 
     def exit_scope(self):
+        """Sale del ámbito actual - PERO MANTIENE LOS SÍMBOLOS PARA ANÁLISIS"""
         if self.current_scope > 0:
+            print(f"DEBUG: Saliendo de ámbito {self.current_scope}")
+            
+            # ANTES de eliminar el scope, guardar los símbolos locales
+            current_scope_symbols = self.scopes[self.current_scope]
+            for name, info in current_scope_symbols.items():
+                self.all_symbols.append({
+                    'nombre': name,
+                    'tipo': info['type'],
+                    'valor': info.get('value'),
+                    'alcance': f'{self.current_scope}',
+                    'linea': info.get('line', 'N/A')
+                })
+                print(f"DEBUG: Guardando símbolo local '{name}' del ámbito {self.current_scope}")
+            
             self.scopes.pop()
             self.current_scope -= 1
+        else:
+            print(f"DEBUG: ERROR - Intentando salir del ámbito global")
 
     def add_symbol(self, name, symbol_type, value=None, line=None):
+        """Agrega un símbolo al ámbito actual"""
         if name in self.scopes[self.current_scope]:
             return False
         
-        # Si no se proporciona línea, intentar obtenerla del contexto
-        if line is None:
-            if self.current_scope > 0 and name in self.scopes[self.current_scope - 1]:
-                line = self.scopes[self.current_scope - 1][name].get('line', 0)
-            else:
-                line = 0
+        ambito = "GLOBAL" if self.current_scope == 0 else f"LOCAL({self.current_scope})"
+        print(f"DEBUG: Agregando símbolo '{name}' tipo '{symbol_type}' en ámbito {ambito}")
 
         self.scopes[self.current_scope][name] = {
             'type': symbol_type,
             'value': value,
             'line': line
         }
+        
+        # Si es global, guardarlo inmediatamente en all_symbols
+        if self.current_scope == 0:
+            self.all_symbols.append({
+                'nombre': name,
+                'tipo': symbol_type,
+                'valor': value,
+                'alcance': 'global',
+                'linea': line
+            })
+        
         return True
+        
+        
 
     def lookup(self, name):
+        """Busca un símbolo desde el ámbito actual hacia afuera"""
         for i in range(self.current_scope, -1, -1):
             if name in self.scopes[i]:
                 return self.scopes[i][name]
@@ -44,39 +74,64 @@ class SymbolTable:
         p[0] = ASTNode('string_literal', value=p[1], lineno=p.lineno(1))
         
     def get_all_symbols(self):
-        symbols = []
-        for i, scope in enumerate(self.scopes):
-            for name, info in scope.items():
-                # Corregir el ámbito - usar el nivel de scope en lugar del texto
-                if i == 0:
-                    alcance = "global"
-                else:
-                    alcance = f"nivel_{i}"
-                
-                symbols.append({
+        """Obtiene todos los símbolos - INCLUYENDO LOCALES"""
+        print(f"DEBUG: Obteniendo {len(self.all_symbols)} símbolos totales")
+        
+        # También agregar símbolos globales actuales por si acaso
+        for name, info in self.scopes[0].items():
+            exists = any(s['nombre'] == name for s in self.all_symbols)
+            if not exists:
+                self.all_symbols.append({
                     'nombre': name,
                     'tipo': info['type'],
                     'valor': info.get('value'),
-                    'alcance': alcance,
+                    'alcance': 'global',
                     'linea': info.get('line', 'N/A')
                 })
-        return symbols
+        
+        # DEBUG
+        for symbol in self.all_symbols:
+            print(f"DEBUG SYMBOL: {symbol['nombre']} -> {symbol['alcance']}")
+            
+        return self.all_symbols
 
 class SemanticAnalyzer:
     def __init__(self):
         self.symbol_table = SymbolTable()
         self.errors = []
         self.semantic_tree = None
+        self.current_function_return_type = None
+        self.current_function_name = None
+        # Nuevo: Contadores para estadísticas de ámbitos
+        self.global_vars = 0
+        self.local_vars = 0
 
     def analyze(self, ast):
         self.errors = []
+        self.global_vars = 0
+        self.local_vars = 0
         if ast:
             self._traverse_ast(ast)
             self.semantic_tree = self._build_semantic_tree(ast)
         return self.errors
 
     def get_symbol_table_data(self):
-        return self.symbol_table.get_all_symbols()
+        symbols = self.symbol_table.get_all_symbols()
+        # Agregar información de ámbito a cada símbolo
+        for symbol in symbols:
+            if symbol['alcance'] == "global":
+                symbol['es_global'] = True
+            else:
+                symbol['es_global'] = False
+        return symbols
+    
+    def get_scope_stats(self):
+        """Retorna estadísticas de ámbitos"""
+        return {
+            'globales': self.global_vars,
+            'locales': self.local_vars,
+            'total': self.global_vars + self.local_vars
+        }
 
     def get_semantic_tree(self):
         return self.semantic_tree
@@ -307,10 +362,16 @@ class SemanticAnalyzer:
         return semantic_node
 
     def _traverse_ast(self, node):
+        """Recorre el AST - VERSIÓN CON FIX INMEDIATO"""
         if not isinstance(node, ASTNode):
             return
 
         try:
+            # EVITAR PROCESAR NODOS DUPLICADOS - FIX INMEDIATO
+            if hasattr(node, '_processed'):
+                return
+            node._processed = True
+            
             if node.type == 'programa':
                 self._process_program(node)
             elif node.type == 'declaracion_variable':
@@ -319,13 +380,6 @@ class SemanticAnalyzer:
                 self._process_assignment(node)
             elif node.type == 'expresion_binaria':
                 self._process_binary_expression(node)
-            elif node.type == 'function_declaration':
-                self._process_function_declaration(node)
-            elif node.type == 'function_call':
-                # Solo procesar para análisis, el tipo se maneja en _get_expression_type
-                pass
-            elif node.type == 'return_statement':
-                self._process_return_statement(node)
             
             # ESTRUCTURAS DE CONTROL
             elif node.type in ['if', 'if_then', 'if_else']:
@@ -335,32 +389,34 @@ class SemanticAnalyzer:
             elif node.type == 'do_while':
                 self._process_do_while_statement(node)
 
-            # Procesar hijos recursivamente
+            # Procesar hijos recursivamente SOLO UNA VEZ
             if hasattr(node, 'children'):
                 for child in node.children:
-                    self._traverse_ast(child)
+                    if isinstance(child, ASTNode) and not hasattr(child, '_processed'):
+                        self._traverse_ast(child)
                         
         except Exception as e:
             self.errors.append(f"Error durante análisis: {str(e)}")
         
         
     def _process_if_statement(self, node):
-        """Procesa cualquier tipo de if con ámbito local"""
+        """Procesa if con ámbito local - VERSIÓN DEFINITIVA"""
         if len(node.children) >= 2:
             # Procesar condición
             cond_type = self._get_expression_type(node.children[0])
             if cond_type != 'bool' and cond_type is not None:
                 self.errors.append(f"Error semántico (línea {node.lineno}): La condición del if debe ser booleana")
 
-            # Procesar bloque THEN
+            # Procesar bloque THEN con NUEVO ÁMBITO
             self.symbol_table.enter_scope()
-            self._process_statement(node.children[1])
+            if node.children[1]:  # Solo procesar si existe el bloque
+                self._traverse_ast(node.children[1])
             self.symbol_table.exit_scope()
 
             # Procesar bloque ELSE si existe
-            if len(node.children) >= 3:
+            if len(node.children) >= 3 and node.children[2]:
                 self.symbol_table.enter_scope()
-                self._process_statement(node.children[2])
+                self._traverse_ast(node.children[2])
                 self.symbol_table.exit_scope()
 
     def _process_while_statement(self, node):
@@ -370,31 +426,37 @@ class SemanticAnalyzer:
             if cond_type != 'bool' and cond_type is not None:
                 self.errors.append(f"Error semántico (línea {node.lineno}): La condición del while debe ser booleana")
 
-            # Procesar cuerpo
+            # Procesar cuerpo con NUEVO ÁMBITO
             self.symbol_table.enter_scope()
             self._process_statement(node.children[1])
             self.symbol_table.exit_scope()
 
     def _process_do_while_statement(self, node):
-        """Procesa do-while con ámbito local"""
-        if len(node.children) >= 2:
-            # Procesar cuerpo primero
-            self.symbol_table.enter_scope()
-            self._process_statement(node.children[0])
-            self.symbol_table.exit_scope()
+            """Procesa do-while con ámbito local"""
+            if len(node.children) >= 2:
+                # Procesar cuerpo primero con NUEVO ÁMBITO
+                self.symbol_table.enter_scope()
+                self._process_statement(node.children[0])
+                self.symbol_table.exit_scope()
 
-            # Luego procesar condición
-            cond_type = self._get_expression_type(node.children[1])
-            if cond_type != 'bool' and cond_type is not None:
-                self.errors.append(f"Error semántico (línea {node.lineno}): La condición del while debe ser booleana")
+                # Luego procesar condición
+                cond_type = self._get_expression_type(node.children[1])
+                if cond_type != 'bool' and cond_type is not None:
+                    self.errors.append(f"Error semántico (línea {node.lineno}): La condición del while debe ser booleana")
+
 
     def _process_statement(self, node):
-        """Procesa una sentencia individual o bloque"""
+        """Procesa una sentencia individual o bloque - VERSIÓN CORREGIDA"""
         if not node:
             return
             
+        print(f"DEBUG: Procesando statement tipo: {node.type}")
+        
         # Si es un bloque con llaves { ... }, procesar su contenido
         if node.type == 'lista_declaraciones':
+            for child in node.children:
+                self._traverse_ast(child)
+        elif node.type == 'bloque':  # Si existe nodo bloque explícito
             for child in node.children:
                 self._traverse_ast(child)
         else:
@@ -513,6 +575,7 @@ class SemanticAnalyzer:
 
 
     def _process_declaration(self, node):
+        """Procesa declaración de variables con contadores de ámbito"""
         if len(node.children) >= 2:
             tipo_node = node.children[0]
             ids_node = node.children[1]
@@ -536,8 +599,15 @@ class SemanticAnalyzer:
             for var_name in identifiers:
                 if not self.symbol_table.add_symbol(var_name, var_type, line=line_number):
                     self.errors.append(f"Error semántico (línea {line_number}): Variable '{var_name}' ya declarada")
+                else:
+                    # CONTAR VARIABLES POR ÁMBITO
+                    if self.symbol_table.current_scope == 0:  # Ámbito global
+                        self.global_vars += 1
+                    else:  # Ámbito local
+                        self.local_vars += 1
 
     def _process_assignment(self, node):
+        """Procesa asignación con verificación de ámbito"""
         if len(node.children) >= 2:
             var_node = node.children[0]
             expr_node = node.children[1]
@@ -551,22 +621,16 @@ class SemanticAnalyzer:
                     return
 
                 var_type = symbol['type']
-                
-                # DEPURACIÓN: Mostrar información de la asignación
-                print(f"DEBUG ASIGNACIÓN: Variable '{var_name}' tipo '{var_type}'")
-                print(f"DEBUG EXPRESIÓN: tipo={type(expr_node)}, valor={expr_node if isinstance(expr_node, str) else getattr(expr_node, 'value', 'NO_VALUE')}")
-                
                 expr_type = self._get_expression_type(expr_node)
                 
-                print(f"DEBUG TIPO EXPRESIÓN: {expr_type}")
-
                 if expr_type is None:
                     self.errors.append(f"Error semántico (línea {node.lineno}): No se puede determinar el tipo de la expresión")
                     return
 
                 if not self._are_types_compatible(var_type, expr_type):
                     self.errors.append(f"Error semántico (línea {node.lineno}): Tipo incompatible en asignación. Se esperaba '{var_type}' pero se encontró '{expr_type}'")
-        
+                    return
+                
     def _process_binary_expression(self, node):
         if len(node.children) >= 2 and hasattr(node, 'value'):
             left_type = self._get_expression_type(node.children[0])
@@ -752,33 +816,38 @@ def test_semantics(input_text):
         }
 
 # Prueba específica
-if __name__ == "__main__":
+def test_ambitos():
+    """Prueba específica para el manejo de ámbitos"""
     test_code = """
     main{
-        int a;
-        int b;
-        int c;
-        a = 5;
-        b = 4;
-        c = a + b;
-        float x;
-        float y;
-        float z;
-        x = 5.5;
-        y = 3.2;
-        z = x * y;
+        int global;
+        global = 10;
+
+        if (global > 5){
+            int local;
+            local = 20;
+        }
     }
     """
     
-    result = test_semantics(test_code)
-    print("=== RESULTADOS DEL ANÁLISIS SEMÁNTICO ===")
+    from sintactico import parse_code
+    result = parse_code(test_code)
     
-    if result['success']:
-        print("✓ Análisis exitoso")
-        print("\nTabla de símbolos:")
-        for symbol in result['symbol_table']:
-            print(f"  {symbol['nombre']}: {symbol['tipo']} (línea {symbol['linea']})")
-    else:
-        print("✗ Errores encontrados:")
-        for error in result['errors']:
-            print(f"  {error}")
+    if result['success'] and result['ast']:
+        analyzer = SemanticAnalyzer()
+        errors = analyzer.analyze(result['ast'])
+        
+        print("=== DIAGNÓSTICO DE ÁMBITOS ===")
+        symbols = analyzer.get_symbol_table_data()
+        for symbol in symbols:
+            print(f"SYMBOL: {symbol['nombre']} -> ámbito: {symbol['alcance']}")
+        
+        return {
+            'errors': errors,
+            'symbol_table': symbols,
+            'success': len(errors) == 0
+        }
+
+if __name__ == "__main__":
+    # Ejecutar prueba de diagnóstico
+    test_ambitos()
